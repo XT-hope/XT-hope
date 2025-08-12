@@ -51,7 +51,7 @@ def split_conditions_by_or(cond: str) -> List[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-BRANCH_HEADER_RE = re.compile(r"^\s*\d+\.\s*(以下条件同时满足|以下条件满足其一)：")
+BRANCH_HEADER_RE = re.compile(r"^\s*\d+\.\s*(以下条件同时满足|以下条件满足其一)\s*[:：]?\s*$")
 SUBITEM_RE = re.compile(r"^\s{2,}\d+\.\s*(.+)$")
 
 
@@ -73,7 +73,7 @@ def parse_conditions(lines: List[str], start_idx: int) -> Tuple[str, int]:
                 phrase = "以下条件同时满足" if "以下条件同时满足" in line else "以下条件满足其一"
                 branch_agg = "&&" if phrase == "以下条件同时满足" else "||"
                 i += 1
-                # Collect subitems (indented numbered lines)
+                # Collect subitems: accept either deeper-indented numbered lines or plain indented content
                 subitems: List[str] = []
                 while i < len(lines):
                     sub_line = lines[i].rstrip("\n")
@@ -82,15 +82,25 @@ def parse_conditions(lines: List[str], start_idx: int) -> Tuple[str, int]:
                     # Another branch header encountered -> end current branch
                     if BRANCH_HEADER_RE.match(sub_line):
                         break
+                    # Accept lines starting with N. or with at least two leading spaces
                     m_sub = SUBITEM_RE.match(sub_line)
                     if not m_sub:
-                        # Non-subitem line ends the branch block
-                        # But allow empty lines inside
-                        if sub_line.strip():
-                            # If it's a plain numbered item at same indent, treat as end
-                            break
-                        i += 1
-                        continue
+                        # treat indented non-empty lines as part of this branch block (e.g., without numbering)
+                        if re.match(r"^\s{2,}\S", sub_line):
+                            item = sub_line.strip()
+                            parts = split_conditions_by_or(item)
+                            if len(parts) > 1:
+                                subitems.append(" || ".join(parts))
+                            else:
+                                subitems.append(item)
+                            i += 1
+                            continue
+                        # blank line inside branch
+                        if not sub_line.strip():
+                            i += 1
+                            continue
+                        # plain non-indented -> branch ends
+                        break
                     item = m_sub.group(1).strip()
                     parts = split_conditions_by_or(item)
                     if len(parts) > 1:
