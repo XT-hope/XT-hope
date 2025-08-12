@@ -176,27 +176,103 @@ def parse_conditions(lines: List[str], start_idx: int) -> Tuple[str, int]:
     else:
         aggregator_set = None
 
-    # Flat parse (legacy)
+    # Flat parse (legacy + grouped branch headers)
     while i < len(lines):
         line = lines[i].rstrip("\n")
         if not line.strip():
             i += 1
             continue
+        # Stop at THEN
         if line.strip().startswith("THEN"):
             break
+
+        # If we encounter a numbered branch header inside flat parse, treat it as a grouped subgroup
+        if BRANCH_HEADER_RE.match(line):
+            phrase = "以下条件同时满足" if "以下条件同时满足" in line else "以下条件满足其一"
+            subgroup_agg = "&&" if phrase == "以下条件同时满足" else "||"
+            i += 1
+            subitems: List[str] = []
+            while i < len(lines):
+                sub_line = lines[i].rstrip("\n")
+                if sub_line.strip().startswith("THEN"):
+                    break
+                if BRANCH_HEADER_RE.match(sub_line):
+                    break
+                m_sub = SUBITEM_RE.match(sub_line)
+                if not m_sub:
+                    if re.match(r"^\s{2,}\S", sub_line):
+                        item = sub_line.strip()
+                        parts = split_conditions_by_or(item)
+                        if len(parts) > 1:
+                            subitems.append(" || ".join(parts))
+                        else:
+                            subitems.append(item)
+                        i += 1
+                        continue
+                    if not sub_line.strip():
+                        i += 1
+                        continue
+                    break
+                item = m_sub.group(1).strip()
+                parts = split_conditions_by_or(item)
+                if len(parts) > 1:
+                    subitems.append(" || ".join(parts))
+                else:
+                    subitems.append(item)
+                i += 1
+            if subitems:
+                collected.append(f"({f' {subgroup_agg} '.join(subitems)})")
+                continue
+
+        # Recognize guidance lines
         if "以下条件同时满足" in line:
             aggregator_set = "&&"
             i += 1
             continue
         if "以下条件满足其一" in line:
+            # Do not flip the global aggregator here; a standalone guidance line should be followed by a subgroup
+            # If such line appears without numbering, try to parse the following indented items into a subgroup
+            lookahead = i + 1
+            subitems: List[str] = []
+            while lookahead < len(lines):
+                la_line = lines[lookahead].rstrip("\n")
+                if la_line.strip().startswith("THEN"):
+                    break
+                if BRANCH_HEADER_RE.match(la_line):
+                    break
+                m_la = SUBITEM_RE.match(la_line)
+                if not m_la:
+                    if re.match(r"^\s{2,}\S", la_line):
+                        item = la_line.strip()
+                        parts = split_conditions_by_or(item)
+                        subitems.append(" || ".join(parts) if len(parts) > 1 else item)
+                        lookahead += 1
+                        continue
+                    if not la_line.strip():
+                        lookahead += 1
+                        continue
+                    break
+                item = m_la.group(1).strip()
+                parts = split_conditions_by_or(item)
+                subitems.append(" || ".join(parts) if len(parts) > 1 else item)
+                lookahead += 1
+            if subitems:
+                collected.append(f"({f' || '.join(subitems)})")
+                i = lookahead
+                continue
+            # If no subitems found, just set aggregator to OR for safety
             aggregator_set = "||"
             i += 1
             continue
+
+        # Remove numbering like '1. ' or '2. '
         m = re.match(r"^\s*\d+\.\s*(.*)$", line)
         if m:
             item = m.group(1).strip()
         else:
+            # Regular condition line
             item = line.strip()
+
         if item:
             parts = split_conditions_by_or(item)
             if len(parts) > 1:
