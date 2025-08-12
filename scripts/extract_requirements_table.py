@@ -169,7 +169,7 @@ def parse_results(lines: List[str], start_idx: int) -> Tuple[str, int]:
     else_str = join_items(results_else)
 
     if then_str and else_str:
-        out = f"THEN: {then_str} || ELSE: {else_str}"
+        out = f"{then_str} || {else_str}"
     else:
         out = then_str or else_str
 
@@ -257,8 +257,7 @@ def extract_rows(text: str) -> List[Tuple[str, str, str, str, str]]:
             # But they only want the heading title text (without number) for HIL初始条件 example. We already set hil_init to title only.
 
             # Append row: 需求ID, 测试点, HIL初始条件, HIL测试步骤, HIL预期结果
-            rows.append((req_id, test_point.split(" ", 1)[1] if " " in test_point else test_point,
-                         hil_init, cond_str, results_str))
+            rows.append((req_id, test_point, hil_init, cond_str, results_str))
 
             i = next_idx
             continue
