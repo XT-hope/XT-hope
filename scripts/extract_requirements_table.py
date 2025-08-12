@@ -51,41 +51,143 @@ def split_conditions_by_or(cond: str) -> List[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+BRANCH_HEADER_RE = re.compile(r"^\s*\d+\.\s*(以下条件同时满足|以下条件满足其一)：")
+SUBITEM_RE = re.compile(r"^\s{2,}\d+\.\s*(.+)$")
+
+
 def parse_conditions(lines: List[str], start_idx: int) -> Tuple[str, int]:
     """
-    Parse conditions between IF and THEN.
+    Parse conditions between IF and THEN, supporting nested groups like:
+    顶层：以下条件满足其一 -> 多个分支；每个分支：以下条件同时满足 -> 多条明细。
     Returns (conditions_str, next_index_position_at_THEN_line)
     """
+    def parse_nested(i: int, top_agg: Optional[str]) -> Tuple[str, int]:
+        branches: List[str] = []
+        while i < len(lines):
+            line = lines[i].rstrip("\n")
+            if line.strip().startswith("THEN"):
+                break
+            # New branch header like "  1. 以下条件同时满足：" or "  2. ..."
+            if BRANCH_HEADER_RE.match(line):
+                # Determine branch aggregator by header phrase
+                phrase = "以下条件同时满足" if "以下条件同时满足" in line else "以下条件满足其一"
+                branch_agg = "&&" if phrase == "以下条件同时满足" else "||"
+                i += 1
+                # Collect subitems (indented numbered lines)
+                subitems: List[str] = []
+                while i < len(lines):
+                    sub_line = lines[i].rstrip("\n")
+                    if sub_line.strip().startswith("THEN"):
+                        break
+                    # Another branch header encountered -> end current branch
+                    if BRANCH_HEADER_RE.match(sub_line):
+                        break
+                    m_sub = SUBITEM_RE.match(sub_line)
+                    if not m_sub:
+                        # Non-subitem line ends the branch block
+                        # But allow empty lines inside
+                        if sub_line.strip():
+                            # If it's a plain numbered item at same indent, treat as end
+                            break
+                        i += 1
+                        continue
+                    item = m_sub.group(1).strip()
+                    parts = split_conditions_by_or(item)
+                    if len(parts) > 1:
+                        subitems.append(" || ".join(parts))
+                    else:
+                        subitems.append(item)
+                    i += 1
+                # Join subitems by branch aggregator and wrap parentheses
+                if subitems:
+                    branches.append(f"({f' {branch_agg} '.join(subitems)})")
+                else:
+                    branches.append("")
+                continue
+            # Non-branch header lines
+            if not line.strip():
+                i += 1
+                continue
+            # Stop if we hit something that clearly ends IF block
+            if HEADING_RE.match(line.strip()):
+                break
+            if re.match(r"^\s*[CB]平台", line) or re.match(r"^\s*\{?FSM_index", line):
+                break
+            # If we encounter a plain numbered condition under top-level aggregator (fallback)
+            m_plain = re.match(r"^\s*\d+\.\s*(.*)$", line)
+            if m_plain:
+                item = m_plain.group(1).strip()
+                parts = split_conditions_by_or(item)
+                if len(parts) > 1:
+                    branches.append("(" + " || ".join(parts) + ")")
+                else:
+                    branches.append(item)
+                i += 1
+                continue
+            # Otherwise stop to avoid looping
+            break
+        # Compose top-level joiner
+        joiner = top_agg if top_agg else " && "
+        cond = f" {joiner} ".join([b for b in branches if b])
+        return cond, i
+
     aggregator: Optional[str] = None  # '&&' or '||'
     collected: List[str] = []
 
     i = start_idx
+    # Peek for nested top guidance
+    # Skip blanks
+    j = i
+    while j < len(lines) and not lines[j].strip():
+        j += 1
+    if j < len(lines) and ("以下条件同时满足" in lines[j] or "以下条件满足其一" in lines[j]):
+        aggregator = "&&" if "以下条件同时满足" in lines[j] else "||"
+        j += 1
+        # If the next significant line is a branch header, use nested parsing
+        k = j
+        while k < len(lines) and not lines[k].strip():
+            k += 1
+        if k < len(lines) and BRANCH_HEADER_RE.match(lines[k]):
+            cond_str, idx_after = parse_nested(k, aggregator)
+            # Advance to THEN (or where nested parsing stopped)
+            # Move i to the position where parse_results expects THEN
+            # Continue scanning until we hit THEN or stop condition
+            mpos = idx_after
+            while mpos < len(lines) and not lines[mpos].strip().startswith("THEN"):
+                if lines[mpos].strip() == "IF":
+                    break
+                if HEADING_RE.match(lines[mpos].strip()):
+                    break
+                mpos += 1
+            return cond_str, mpos
+        # Otherwise fall back to flat parse with set aggregator
+        aggregator_set = aggregator
+        i = j
+    else:
+        aggregator_set = None
+
+    # Flat parse (legacy)
     while i < len(lines):
         line = lines[i].rstrip("\n")
         if not line.strip():
             i += 1
             continue
-        # Stop at THEN
         if line.strip().startswith("THEN"):
             break
-        # Recognize guidance lines
         if "以下条件同时满足" in line:
-            aggregator = "&&"
+            aggregator_set = "&&"
             i += 1
             continue
         if "以下条件满足其一" in line:
-            aggregator = "||"
+            aggregator_set = "||"
             i += 1
             continue
-        # Remove numbering like '1. ' or '2. '
         m = re.match(r"^\s*\d+\.\s*(.*)$", line)
         if m:
             item = m.group(1).strip()
         else:
-            # Regular condition line
             item = line.strip()
         if item:
-            # Split by standalone 'or'
             parts = split_conditions_by_or(item)
             if len(parts) > 1:
                 collected.append(" || ".join(parts))
@@ -93,11 +195,10 @@ def parse_conditions(lines: List[str], start_idx: int) -> Tuple[str, int]:
                 collected.append(item)
         i += 1
 
-    # Join collected conditions
     if not collected:
         cond_str = ""
     else:
-        joiner = aggregator if aggregator else " && "
+        joiner = aggregator_set if aggregator_set else " && "
         cond_str = joiner.join(collected)
 
     return cond_str, i  # i at THEN line index
