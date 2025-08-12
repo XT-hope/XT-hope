@@ -1,0 +1,166 @@
+2.3.1 功能故障条件 {DA_Failure}【D-SM-SWR2025061802】
+IF 
+  {function_support_status:bit35} == 1 
+THEN
+  {DA_Failure} = 1
+ELSE
+  {DA_Failure} = 0
+2.3.1.1.1 C平台
+C平台已实现
+2.3.1.1.2 B平台
+B平台已实现
+{FSM_index_ACC_FastExt_u32:bit20}=1
+2.3.2 功能抑制条件 {DA_Inhibit}【D-SM-SWR2025061803】
+功能未激活，满足功能抑制条件功能无法激活；功能已激活，满足功能抑制条件功能退出；
+条件说明
+信号逻辑
+备注
+系统不存在功能抑制条件
+{DA_Inhibit}=0
+
+系统存在功能软抑制条件（一级报警）
+{DA_Inhibit}=1
+
+系统存在功能软抑制条件（二级报警）
+{DA_Inhibit}=2
+
+系统存在功能慢退条件 （延时退出）
+{DA_Inhibit}=3
+
+系统存在功能快速抑制条件（触发MRM）
+{DA_Inhibit}=4
+
+系统存在功能快速抑制条件（立即退出）
+{DA_Inhibit}=5
+
+2.3.2.1 功能软抑制条件（一级报警）{DA_Inhibit}=1
+2.3.2.1.1 驾驶员安全带打开【D-SM-SWR2025061804】
+IF
+  以下条件同时满足：
+  1. {Driver_Belt_Status_S} == 0x1(Unlock)
+  2. {Driver_Belt_Stat_Effective_Bit_S} == 0x0:valid
+THEN
+  {DA_Inhibit} = 1
+  {ALN_WarningText} == 0x3A  (发10s)       // “请系好安全带，驾驶辅助即将退出”
+2.3.2.1.1.1 C平台
+C平台已实现
+2.3.2.1.1.2 B平台
+B平台未实现
+2.3.2.1.2 前视摄像头failsafe【D-SM-SWR2025071801】
+IF
+  {extend_fault_codes [3] bit 0} == 1，debounce 500ms
+THEN
+  {DA_Inhibit} = 1
+  {ALN_WarningText} = 0x3C "请控制车辆，注意环境变化"
+2.3.2.1.2.1 C平台
+C平台已实现
+2.3.2.1.2.2 B平台
+B平台未实现
+2.3.2.2 功能软抑制条件（二级报警）{DA_Inhibit}=2
+2.3.2.2.1 驾驶员安全带打开【D-SM-SWR2025061805】
+IF
+  以下条件同时满足：
+  1. {Driver_Belt_Status_S} == 0x1(Unlock)
+  2. {Driver_Belt_Stat_Effective_Bit_S} == 0x0:valid
+  3. {ALN_WarningText} == 0x3A  持续>=10s
+THEN
+  {DA_Inhibit} = 2
+  {ALN_WarningText} == 0x39 (发10s)                     // “请准备控制车辆，驾驶辅助即将退出”
+2.3.2.2.1.1 C平台
+C平台已实现
+2.3.2.2.1.2 B平台
+B平台未实现
+2.3.2.3 功能慢退条件 {DA_Inhibit}=3
+2.3.2.3.1 TCS激活【D-SM-SWR2025061806】
+IF 
+  以下条件同时满足：
+  1. {LFI_Longitudinal_Torque_Interface_Function_Execution_Estimate_S} >= -50(TBD)
+  2. {ESC_BrkTqCtrlActv} != 0x2 ACC Active
+  3. {TCS_Active}= 0x1: Active，debounce 1000ms
+  4. {TCS_Fault}=0x0:No Failure，debounce 1000ms
+THEN
+  {DA_Inhibit} = 3
+2.3.2.3.1.1 C平台
+C平台未实现
+2.3.2.3.1.2 B平台
+B平台已实现
+{FSM_index_ACC_FastExt_u32:bit19}=1
+2.3.2.3.2 ABS激活【D-SM-SWR2025061807】
+IF 
+  以下条件同时满足：
+  1. {LFI_Longitudinal_Torque_Interface_Function_Execution_Estimate_S}>= -50(TBD)
+  2. {ESC_BrkTqCtrlActv}!= 0x2 ACC Active
+  3. {ABS_Active}= 0x1: Active，debounce 1000ms
+  4. {ABS_Fault}=0x0:No Failure，debounce 1000ms
+THEN
+  {DA_Inhibit} = 3
+2.3.2.3.2.1 C平台
+C平台已实现
+2.3.2.3.2.2 B平台
+B平台已实现
+{FSM_index_ACC_FastExt_u32:bit18}=1
+2.3.2.3.3 VDC激活【D-SM-SWR2025061808】
+IF 
+  以下条件同时满足：
+  1. {LFI_Longitudinal_Torque_Interface_Function_Execution_Estimate_S}>= -50(TBD)
+  2. {ESC_BrkTqCtrlActv}!= 0x2 ACC Active
+  3. {VDC_Active}= 0x1: Active，debounce 300ms
+  4. {VDC_Fault}=0x0:No Failure，debounce 300ms
+THEN
+  {DA_Inhibit} = 3
+2.3.2.3.3.1 C平台
+C平台已实现
+2.3.2.3.3.2 B平台
+B平台已实现
+{FSM_index_ACC_SlowExt_u32:bit29}=1
+2.3.2.3.4 HDC激活【D-SM-SWR2025061809】
+IF 
+  以下条件同时满足：
+  1. {LFI_Longitudinal_Torque_Interface_Function_Execution_Estimate_S}>= -50(TBD)
+  2. {ESC_BrkTqCtrlActv}!= 0x2 ACC Active
+  3. {HDC_CtrlStatus}= 0x2，debounce 300ms
+THEN
+  {DA_Inhibit} = 3
+2.3.2.3.4.1 C平台
+C平台已实现
+2.3.2.3.4.2 B平台
+B平台已实现
+{FSM_index_ACC_FastExt_u32:bit13}=1
+2.3.2.4 功能快速抑制条件（触发MRM）{DA_Inhibit}=4
+2.3.2.4.1 驾驶员闭眼（暂不实施）
+IF 
+  以下条件同时满足：
+  1. {DNP_Stats_S}= 0x4：ICC Active2/0x6：DNP Active
+  2. {Speed_Signal_151_S}∈[20,135]km/h
+  3. {DMS_Driver_Disable_S}= 0x2：闭眼睡着失能
+THEN
+  {DA_Inhibit} = 4
+2.3.2.4.2 驾驶员分心（暂不实施）
+IF 
+  以下条件同时满足：
+  1. {DNP_Stats_S }= 0x4：ICC Active2/0x6：DNP Active
+  2. {Speed_Signal_151_S}∈[20,135]km/h
+  3. {DMS_Driver_Disable_S}= 0x3：长时间分心失能
+THEN
+  {DA_Inhibit} = 4
+2.3.2.4.3 驾驶员疾病（暂不实施）
+IF 
+  以下条件同时满足：
+  1. {DNP_Stats_S }= 0x4：ICC Active2/0x6：DNP Active
+  2. {Speed_Signal_151_S}∈[20,135]km/h
+  3. {DMS_Driver_Disable_S}= 0x4：突发疾病失能
+THEN
+  {DA_Inhibit} = 4
+2.3.2.4.4 驾驶员脱手【D-SM-SWR2025061810】
+IF 
+  以下条件满足其一：
+  1. {DNP_Take_Over_Req_S} = 0x4: safestop for 3 cycles
+  2. 上电周期内(下电后计数清零)，累计3次触发脱手的T3提醒，则第3次的T3时刻 {DNP_Take_Over_Req_S} = 0x6 for 3 cycles
+THEN
+  {DA_Inhibit} = 4
+2.3.2.4.4.1 C平台
+C平台已实现
+2.3.2.4.4.2 B平台
+B平台未实现
+
+这是一篇记录数据的md文档
