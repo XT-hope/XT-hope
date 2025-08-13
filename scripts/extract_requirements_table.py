@@ -65,8 +65,8 @@ def _normalize_explanation_suffix_once(text: str) -> str:
         head = m.group("head")
         val = m.group("val")
         expl = m.group("expl").strip()
-        # Skip if explanation contains characters that usually denote options or operators
-        if any(ch in expl for ch in "/+|&"):  # e.g., (Resume/+)
+        # Skip only if explanation clearly contains boolean operators to avoid breaking expressions
+        if "&&" in expl or "||" in expl:
             return m.group(0)
         return f"{head}{val}: {expl}"
 
