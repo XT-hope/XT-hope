@@ -140,6 +140,32 @@ def handle_parse_conditions_item(item: str) -> str:
                 return idx
         return -1
 
+    def split_by_top_level_slash(s: str) -> List[str]:
+        """Split string by top-level '/' ignoring parentheses; skip empty segments.
+        Example: "A /B/ C(Keep/It) / D" -> ["A", "B", "C(Keep/It)", "D"]
+        """
+        parts: List[str] = []
+        buf: List[str] = []
+        depth = 0
+        for ch in s:
+            if ch == '(':
+                depth += 1
+                buf.append(ch)
+            elif ch == ')':
+                depth = max(depth - 1, 0)
+                buf.append(ch)
+            elif ch == '/' and depth == 0:
+                seg = ''.join(buf).strip()
+                if seg:
+                    parts.append(seg)
+                buf = []
+            else:
+                buf.append(ch)
+        tail = ''.join(buf).strip()
+        if tail:
+            parts.append(tail)
+        return parts
+
     def normalize_label_value(expr: str) -> str:
         """Turn 'LABEL:VALUE' into 'VALUE:LABEL' when LABEL is a word and ':' is ASCII.
         Keep other content unchanged.
@@ -156,7 +182,7 @@ def handle_parse_conditions_item(item: str) -> str:
         pre = item[:slash_idx].strip()
         post = item[slash_idx + 1:].strip()
 
-        # Extract header and relation from the left part (before '/')
+        # Extract header and relation from the left part (before first '/')
         ops = ["==", ">=", "<=", "!=", ">", "<", "="]
         header = None
         op_found = None
@@ -168,14 +194,13 @@ def handle_parse_conditions_item(item: str) -> str:
 
         if header and op_found:
             left_val_raw = pre.split(op_found, 1)[1].strip()
-            right_val_raw = post
-
-            left_val = normalize_label_value(left_val_raw)
-            right_val = normalize_label_value(right_val_raw)
-
-            left_expr = f"{header} {op_found} {left_val}"
-            right_expr = f"{header} {op_found} {right_val}"
-            out = f"({left_expr} || {right_expr})"
+            # Collect all RHS alternatives: include the left value and split the remainder by top-level '/'
+            rhs_alternatives_raw = [left_val_raw] + split_by_top_level_slash(post)
+            # Normalize label:value ordering where applicable
+            rhs_alternatives = [normalize_label_value(v) for v in rhs_alternatives_raw if v.strip()]
+            # Build OR expression for all alternatives
+            exprs = [f"{header} {op_found} {val}" for val in rhs_alternatives]
+            out = f"({" || ".join(exprs)})"
             return normalize_explanation_suffix(out)
 
     out = f"({item})" if needs_wrap else item
