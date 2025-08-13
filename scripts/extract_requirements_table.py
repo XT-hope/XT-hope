@@ -89,7 +89,23 @@ def _normalize_explanation_suffix_once(text: str) -> str:
     )
     s_new = pattern_nospace.sub(repl_nospace, s_new)
 
-    # 3) Space separated explanation (ensure it ends before &&, ||, or end):
+    # 3) Comma/Chinese-comma separated explanation:
+    #    {X} == 1，debounce 500ms -> {X} == 1: debounce 500ms
+    #    {X} = 0x1: Active，debounce 1000ms -> {X} = 0x1: Active: debounce 1000ms
+    def repl_comma(m: re.Match) -> str:
+        head = m.group("head")
+        val = m.group("val").strip()
+        expl = m.group("expl").strip()
+        if not expl:
+            return m.group(0)
+        return f"{head}{val}: {expl}"
+
+    pattern_comma = re.compile(
+        _EXPL_HEAD_RE + r"(?P<val>[^,，()（）\"]+?)\s*[，,]\s*(?P<expl>[^()（）\"]*?)\s*(?=(?:&&|\|\||$))"
+    )
+    s_new = pattern_comma.sub(repl_comma, s_new)
+
+    # 4) Space separated explanation (ensure it ends before &&, ||, or end):
     #    {X} == 0x0 Unavailable -> {X} == 0x0: Unavailable
     #    Guard against splitting hex sequences where a word follows immediately after a single hex digit (e.g., 0x1Enabled)
     def repl_space(m: re.Match) -> str:
