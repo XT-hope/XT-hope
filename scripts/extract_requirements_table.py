@@ -58,7 +58,7 @@ def split_conditions_by_or(cond: str) -> List[str]:
 # New: normalize malformed explanation suffixes that describe RHS values of comparisons.
 # Only triggers for patterns starting with a braced signal and a comparison operator,
 # so pure text conditions are unaffected.
-_EXPL_HEAD_RE = r"(?P<head>\{[^{}]+\}\s*(?:==|>=|<=|!=|=|>|<)\s*)"
+_EXPL_HEAD_RE = r"(?P<head>\{[^{}]+\}\s*(?:==|>=|<=|!=|=|>|<|＞＝|＜＝|≥|≤|≠|＞|＜|＝)\s*)"
 
 
 def _normalize_explanation_suffix_once(text: str) -> str:
@@ -95,7 +95,7 @@ def _normalize_explanation_suffix_once(text: str) -> str:
 
     pattern_sig_annot_full = re.compile(
         r"(?P<braced>\{[^{}]+\})\s*(?:\(\s*(?P<sigexpl>[^()（）:]+?)\s*\)|（\s*(?P<sigexpl2>[^()（）:]+?)\s*）)\s*"
-        r"(?P<op>==|>=|<=|!=|=|>|<)\s*"
+        r"(?P<op>==|>=|<=|!=|=|>|<|＞＝|＜＝|≥|≤|≠|＞|＜|＝)\s*"
         r"(?P<val>[^\s:()（）]+)\s*"
         r"(?:\(\s*(?P<valexpl>[^()（）:]+?)\s*\)|（\s*(?P<valexpl2>[^()（）:]+?)\s*）)?"
         r"(?=(?:\s*(?:&&|\|\|)|\s*$))"
@@ -112,7 +112,7 @@ def _normalize_explanation_suffix_once(text: str) -> str:
 
     pattern_sig_annot_simple = re.compile(
         r"(?P<braced>\{[^{}]+\})\s*(?:\(\s*(?P<sigexpl>[^()（）:]+?)\s*\)|（\s*(?P<sigexpl2>[^()（）:]+?)\s*）)\s*"
-        r"(?P<op>==|>=|<=|!=|=|>|<)\s*"
+        r"(?P<op>==|>=|<=|!=|=|>|<|＞＝|＜＝|≥|≤|≠|＞|＜|＝)\s*"
         r"(?P<val>[^\s:()（）]+)"
         r"(?=(?:\s*(?:&&|\|\|)|\s*$))"
     )
