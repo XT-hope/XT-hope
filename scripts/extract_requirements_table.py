@@ -129,6 +129,43 @@ def handle_parse_conditions_item(item: str) -> str:
     # Only wrap if there are explicit boolean operators to preserve grouping
     needs_wrap = any(tok in item for tok in ("&&", "||", "&"))
 
+    def is_unit_slash_at(s: str, idx: int) -> bool:
+        """Heuristically determine whether the '/' at s[idx] is part of a unit like 'm/s' or 'km/h'.
+
+        Conditions:
+        - Immediate non-space characters on both sides are alphabetic (or '°' or 'µ').
+        - There is a digit or '.' (number) immediately before the left unit token (ignoring spaces),
+          which strongly indicates a measurement unit.
+        """
+        if idx <= 0 or idx >= len(s) - 1:
+            return False
+        # Find nearest non-space neighbors around '/'
+        li = idx - 1
+        while li >= 0 and s[li].isspace():
+            li -= 1
+        ri = idx + 1
+        while ri < len(s) and s[ri].isspace():
+            ri += 1
+        if li < 0 or ri >= len(s):
+            return False
+        left_ch = s[li]
+        right_ch = s[ri]
+        def is_unit_char(ch: str) -> bool:
+            return ch.isalpha() or ch in "°µ"
+        if not (is_unit_char(left_ch) and is_unit_char(right_ch)):
+            return False
+        # Walk left to the start of the unit token
+        lstart = li
+        while lstart >= 0 and is_unit_char(s[lstart]):
+            lstart -= 1
+        # Previous significant char before the unit token
+        pj = lstart
+        while pj >= 0 and s[pj].isspace():
+            pj -= 1
+        if pj >= 0 and (s[pj].isdigit() or s[pj] in ".°"):
+            return True
+        return False
+
     def find_top_level_slash(s: str) -> int:
         depth = 0
         for idx, ch in enumerate(s):
@@ -137,6 +174,9 @@ def handle_parse_conditions_item(item: str) -> str:
             elif ch == ')':
                 depth = max(depth - 1, 0)
             elif ch == '/' and depth == 0:
+                # Skip slashes that are part of measurement units like m/s
+                if is_unit_slash_at(s, idx):
+                    continue
                 return idx
         return -1
 
@@ -147,7 +187,7 @@ def handle_parse_conditions_item(item: str) -> str:
         parts: List[str] = []
         buf: List[str] = []
         depth = 0
-        for ch in s:
+        for idx, ch in enumerate(s):
             if ch == '(':
                 depth += 1
                 buf.append(ch)
@@ -155,6 +195,10 @@ def handle_parse_conditions_item(item: str) -> str:
                 depth = max(depth - 1, 0)
                 buf.append(ch)
             elif ch == '/' and depth == 0:
+                # If this slash is a unit divider (e.g., m/s), keep it as text
+                if is_unit_slash_at(s, idx):
+                    buf.append(ch)
+                    continue
                 seg = ''.join(buf).strip()
                 if seg:
                     parts.append(seg)
@@ -192,7 +236,8 @@ def handle_parse_conditions_item(item: str) -> str:
                 op_found = op
                 break
 
-        if header and op_found:
+        # Only expand slashed alternatives for explicit signal/value comparisons like {X} = A/B
+        if header and op_found and re.match(r"^\{[^{}]+\}$", header):
             left_val_raw = pre.split(op_found, 1)[1].strip()
             # Collect all RHS alternatives: include the left value and split the remainder by top-level '/'
             rhs_alternatives_raw = [left_val_raw] + split_by_top_level_slash(post)
