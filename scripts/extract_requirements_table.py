@@ -22,10 +22,31 @@ def strip_brackets_pair(text: str) -> str:
     return re.sub(r"【[^】]*】", "", text)
 
 
+def strip_unavailable_annotation(text: str) -> str:
+    """Remove trailing 'Unavailable' annotations in various formats.
+
+    Supported examples:
+    - "== 0x0:Unavailable" or with Chinese colon
+    - "== 0x0Unavailable" (concatenated)
+    - "== 0x0 Unavailable" (space-separated)
+    - "== 0x0 (Unavailable)" or with Chinese parentheses
+    """
+    # Remove parenthesized forms first
+    text = re.sub(r"\s*[\(（]\s*Unavailable\s*[\)）]", "", text, flags=re.IGNORECASE)
+    # Remove colon-labelled forms (ASCII or Chinese colon)
+    text = re.sub(r"\s*[:：]\s*Unavailable\b", "", text, flags=re.IGNORECASE)
+    # Remove token appended or separated after common numeric literals (hex/decimal/percent)
+    text = re.sub(r"(\b0x[0-9A-Fa-f]+)\s*Unavailable\b", r"\1", text, flags=re.IGNORECASE)
+    text = re.sub(r"(\b\d+(?:\.\d+)?%?)\s*Unavailable\b", r"\1", text, flags=re.IGNORECASE)
+    return text
+
+
 def normalize_text(text: str) -> str:
     text = text.strip()
     text = strip_brackets_pair(text)
     text = strip_braces(text)
+    # Strip erroneous/uniform Unavailable annotations
+    text = strip_unavailable_annotation(text)
     # Normalize inner whitespace
     text = re.sub(r"\s+", " ", text)
     return text.strip()
@@ -506,9 +527,6 @@ def extract_rows(text: str) -> List[Tuple[str, str, str, str, str]]:
             hil_init = normalize_text(hil_init)
             cond_str = normalize_text(cond_str)
             results_str = normalize_text(results_str)
-
-            # Also, test_point should not include leading numbering? Example keeps number. So fine.
-            # But they only want the heading title text (without number) for HIL初始条件 example. We already set hil_init to title only.
 
             # Append row: 需求ID, 测试点, HIL初始条件, HIL测试步骤, HIL预期结果
             rows.append((req_id, test_point, hil_init, cond_str, results_str))
