@@ -55,6 +55,67 @@ BRANCH_HEADER_RE = re.compile(r"^\s*\d+\.\s*(以下条件同时满足|以下条�
 SUBITEM_RE = re.compile(r"^\s{2,}\d+\.\s*(.+)$")
 
 
+def handle_parse_conditions_item(item: str) -> str:
+    """Expand slashed alternatives at top level only and normalize EV/DM ordering.
+
+    - Top-level slash: "{X}=A/B" -> "({X}=A || {X}=B)"
+    - Do not split when slash is inside parentheses: "=0x3(Resume/+)" stays intact
+    - Normalize "EV:10%" -> "10%:EV" and similarly for other label:value to value:label when building comparisons
+    """
+    # Only wrap if there are explicit boolean operators to preserve grouping
+    needs_wrap = any(tok in item for tok in ("&&", "||", "&"))
+
+    def find_top_level_slash(s: str) -> int:
+        depth = 0
+        for idx, ch in enumerate(s):
+            if ch == '(':  # increase depth
+                depth += 1
+            elif ch == ')':
+                depth = max(depth - 1, 0)
+            elif ch == '/' and depth == 0:
+                return idx
+        return -1
+
+    def normalize_label_value(expr: str) -> str:
+        """Turn 'LABEL:VALUE' into 'VALUE:LABEL' when LABEL is a word and ':' is ASCII.
+        Keep other content unchanged.
+        """
+        m = re.match(r"^\s*([A-Za-z][A-Za-z0-9_]*)\s*:\s*([^:]+?)\s*$", expr)
+        if m:
+            label = m.group(1).strip()
+            value = m.group(2).strip()
+            return f"{value}:{label}"
+        return expr.strip()
+
+    slash_idx = find_top_level_slash(item)
+    if slash_idx != -1:
+        pre = item[:slash_idx].strip()
+        post = item[slash_idx + 1:].strip()
+
+        # Extract header and relation from the left part (before '/')
+        ops = ["==", ">=", "<=", "!=", ">", "<", "="]
+        header = None
+        op_found = None
+        for op in ops:
+            if op in pre:
+                header = pre.split(op, 1)[0].strip()
+                op_found = op
+                break
+
+        if header and op_found:
+            left_val_raw = pre.split(op_found, 1)[1].strip()
+            right_val_raw = post
+
+            left_val = normalize_label_value(left_val_raw)
+            right_val = normalize_label_value(right_val_raw)
+
+            left_expr = f"{header} {op_found} {left_val}"
+            right_expr = f"{header} {op_found} {right_val}"
+            return f"({left_expr} || {right_expr})"
+
+    return f"({item})" if needs_wrap else item
+
+
 def parse_conditions(lines: List[str], start_idx: int) -> Tuple[str, int]:
     """
     Parse conditions between IF and THEN, supporting nested groups like:
@@ -90,9 +151,10 @@ def parse_conditions(lines: List[str], start_idx: int) -> Tuple[str, int]:
                             item = sub_line.strip()
                             parts = split_conditions_by_or(item)
                             if len(parts) > 1:
-                                subitems.append(" || ".join(parts))
+                                handled = [handle_parse_conditions_item(p) for p in parts]
+                                subitems.append(" || ".join(handled))
                             else:
-                                subitems.append(item)
+                                subitems.append(handle_parse_conditions_item(item))
                             i += 1
                             continue
                         # blank line inside branch
@@ -104,9 +166,10 @@ def parse_conditions(lines: List[str], start_idx: int) -> Tuple[str, int]:
                     item = m_sub.group(1).strip()
                     parts = split_conditions_by_or(item)
                     if len(parts) > 1:
-                        subitems.append(" || ".join(parts))
+                        handled = [handle_parse_conditions_item(p) for p in parts]
+                        subitems.append(" || ".join(handled))
                     else:
-                        subitems.append(item)
+                        subitems.append(handle_parse_conditions_item(item))
                     i += 1
                 # Join subitems by branch aggregator and wrap parentheses
                 if subitems:
@@ -129,9 +192,10 @@ def parse_conditions(lines: List[str], start_idx: int) -> Tuple[str, int]:
                 item = m_plain.group(1).strip()
                 parts = split_conditions_by_or(item)
                 if len(parts) > 1:
-                    branches.append("(" + " || ".join(parts) + ")")
+                    handled = [handle_parse_conditions_item(p) for p in parts]
+                    branches.append("(" + " || ".join(handled) + ")")
                 else:
-                    branches.append(item)
+                    branches.append(handle_parse_conditions_item(item))
                 i += 1
                 continue
             # Otherwise stop to avoid looping
@@ -204,9 +268,10 @@ def parse_conditions(lines: List[str], start_idx: int) -> Tuple[str, int]:
                         item = sub_line.strip()
                         parts = split_conditions_by_or(item)
                         if len(parts) > 1:
-                            subitems.append(" || ".join(parts))
+                            handled = [handle_parse_conditions_item(p) for p in parts]
+                            subitems.append(" || ".join(handled))
                         else:
-                            subitems.append(item)
+                            subitems.append(handle_parse_conditions_item(item))
                         i += 1
                         continue
                     if not sub_line.strip():
@@ -216,9 +281,10 @@ def parse_conditions(lines: List[str], start_idx: int) -> Tuple[str, int]:
                 item = m_sub.group(1).strip()
                 parts = split_conditions_by_or(item)
                 if len(parts) > 1:
-                    subitems.append(" || ".join(parts))
+                    handled = [handle_parse_conditions_item(p) for p in parts]
+                    subitems.append(" || ".join(handled))
                 else:
-                    subitems.append(item)
+                    subitems.append(handle_parse_conditions_item(item))
                 i += 1
             if subitems:
                 collected.append(f"({f' {subgroup_agg} '.join(subitems)})")
@@ -245,7 +311,7 @@ def parse_conditions(lines: List[str], start_idx: int) -> Tuple[str, int]:
                     if re.match(r"^\s{2,}\S", la_line):
                         item = la_line.strip()
                         parts = split_conditions_by_or(item)
-                        subitems.append(" || ".join(parts) if len(parts) > 1 else item)
+                        subitems.append(" || ".join(handle_parse_conditions_item(p) for p in parts) if len(parts) > 1 else handle_parse_conditions_item(item))
                         lookahead += 1
                         continue
                     if not la_line.strip():
@@ -254,7 +320,7 @@ def parse_conditions(lines: List[str], start_idx: int) -> Tuple[str, int]:
                     break
                 item = m_la.group(1).strip()
                 parts = split_conditions_by_or(item)
-                subitems.append(" || ".join(parts) if len(parts) > 1 else item)
+                subitems.append(" || ".join(handle_parse_conditions_item(p) for p in parts) if len(parts) > 1 else handle_parse_conditions_item(item))
                 lookahead += 1
             if subitems:
                 collected.append(f"({f' || '.join(subitems)})")
@@ -276,9 +342,10 @@ def parse_conditions(lines: List[str], start_idx: int) -> Tuple[str, int]:
         if item:
             parts = split_conditions_by_or(item)
             if len(parts) > 1:
-                collected.append(" || ".join(parts))
+                handled = [handle_parse_conditions_item(p) for p in parts]
+                collected.append(" || ".join(handled))
             else:
-                collected.append(item)
+                collected.append(handle_parse_conditions_item(item))
         i += 1
 
     if not collected:
