@@ -261,12 +261,14 @@ def handle_parse_conditions_item(item: str) -> str:
             return True
         return False
 
-    def find_top_level_slash(s: str) -> int:
+    def find_top_level_slash(s: str, cutoff_idx: Optional[int] = None) -> int:
         depth = 0
         for idx, ch in enumerate(s):
-            if ch == '(':  # increase depth
+            if cutoff_idx is not None and idx >= cutoff_idx:
+                break
+            if ch in ('(', '（'):
                 depth += 1
-            elif ch == ')':
+            elif ch in (')', '）'):
                 depth = max(depth - 1, 0)
             elif ch == '/' and depth == 0:
                 # Skip slashes that are part of measurement units like m/s
@@ -283,10 +285,10 @@ def handle_parse_conditions_item(item: str) -> str:
         buf: List[str] = []
         depth = 0
         for idx, ch in enumerate(s):
-            if ch == '(':
+            if ch in ('(', '（'):
                 depth += 1
                 buf.append(ch)
-            elif ch == ')':
+            elif ch in (')', '）'):
                 depth = max(depth - 1, 0)
                 buf.append(ch)
             elif ch == '/' and depth == 0:
@@ -316,10 +318,29 @@ def handle_parse_conditions_item(item: str) -> str:
             return f"{value}:{label}"
         return expr.strip()
 
-    slash_idx = find_top_level_slash(item)
+    def find_op_rhs_start(s: str) -> Optional[int]:
+        m = re.search(r"\{[^{}]+\}\s*(==|>=|<=|!=|=|>|<)", s)
+        return m.end() if m else None
+
+    def find_first_top_level_ascii_colon_from(s: str, start: int) -> int:
+        depth = 0
+        for idx in range(start, len(s)):
+            ch = s[idx]
+            if ch in ('(', '（'):
+                depth += 1
+            elif ch in (')', '）'):
+                depth = max(depth - 1, 0)
+            elif ch == ':' and depth == 0:
+                return idx
+        return -1
+
+    op_rhs_idx = find_op_rhs_start(item)
+    colon_cutoff = find_first_top_level_ascii_colon_from(item, op_rhs_idx) if op_rhs_idx is not None else -1
+
+    slash_idx = find_top_level_slash(item, colon_cutoff if colon_cutoff != -1 else None)
     if slash_idx != -1:
         pre = item[:slash_idx].strip()
-        post = item[slash_idx + 1:].strip()
+        post = item[slash_idx + 1:(colon_cutoff if colon_cutoff != -1 else len(item))].strip()
 
         # Extract header and relation from the left part (before '/')
         ops = ["==", ">=", "<=", "!=", ">", "<", "="]
