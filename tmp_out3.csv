@@ -1,2 +1,3 @@
 需求ID,测试点,HIL初始条件,HIL测试步骤,HIL预期结果
 D-SM-SWR2025061846,2.3.6.3 航向角超限,,0<车速≤40 维持当前夹角6°（TBD） 对应的横向速度 0~1.16m/s||40＜车速≤80 将夹角收紧为4°（TBD） 对应的横向速度0.7m/s~1.4m/s||80<车速≤130 将夹角收紧为3°（TBD） 对应的横向速度1.16m/s~1.88m/s,Lateral_ActivationPrevention = 1
+D-SM-SWR2025061813,2.3.2.5.4 车速高于抑制车速上限,,Speed_Signal_151_S> 135: kph: 国内ACC/ICC/HNOA || Speed_Signal_151_S> 105: kph: 国内CNOA && Speed_Signal_151_S> 155: kph: 海外,DA_Inhibit = 5
