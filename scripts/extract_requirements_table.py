@@ -67,7 +67,7 @@ def _normalize_explanation_suffix_once(text: str) -> str:
     # Helper: insert a space between a leading numeric token and a recognized unit
     # Example: 135kph -> 135 kph; 105KPH -> 105 KPH; 500ms (kept if used as value)
     unit_compact_value_re = re.compile(
-        r"^(?P<num>[-+]?\d+(?:\.\d+)?)\s*(?P<unit>kph|kmh|kmph|mph|rpm|kpa|pa|bar|hz|khz|mhz|ghz|v|a|ma|ua|mv|g|kg|n)$",
+        r"^(?P<num>[-+]?\d+(?:\.\d+)?)\s*(?P<unit>(?:[A-Za-z°µ]+(?:/[A-Za-z0-9°µ²]+)+)|(?:[A-Za-z°µ]+))$",
         re.IGNORECASE,
     )
 
@@ -138,6 +138,12 @@ def _normalize_explanation_suffix_once(text: str) -> str:
         head = m.group("head")
         val = insert_space_number_unit(m.group("val"))
         expl = m.group("expl").strip()
+        # Guard: if immediately followed by a '/', likely a measurement like 3m/s²; skip
+        s_full: str = m.string
+        if m.end() < len(s_full):
+            next_char = s_full[m.end()]
+            if next_char in "/²^":
+                return m.group(0)
         return f"{head}{val}: {expl}"
 
     pattern_nospace = re.compile(
