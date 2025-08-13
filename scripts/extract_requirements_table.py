@@ -21,6 +21,9 @@ def strip_brackets_pair(text: str) -> str:
     # Remove the Chinese brackets section 【...】 entirely
     return re.sub(r"【[^】]*】", "", text)
 
+def strip_colon(text: str) -> str:
+    return text.replace("：", ":")
+
 
 def normalize_text(text: str) -> str:
     text = text.strip()
@@ -28,6 +31,7 @@ def normalize_text(text: str) -> str:
     text = strip_braces(text)
     # Normalize inner whitespace
     text = re.sub(r"\s+", " ", text)
+    text = strip_colon(text)
     return text.strip()
 
 
@@ -60,6 +64,47 @@ _EXPL_HEAD_RE = r"(?P<head>\{[^{}]+\}\s*(?:==|>=|<=|!=|=|>|<)\s*)"
 def _normalize_explanation_suffix_once(text: str) -> str:
     s = text
 
+    # 0) Handle annotation immediately after braced signal name before the operator.
+    #    Example: {X}(描述) == 0x1(Active) -> {X} == 0x1: Active-描述
+    #    Example: {X}(描述) = 0x0 -> {X} = 0x0: 描述
+    def repl_sig_annot_full(m: re.Match) -> str:
+        braced = m.group("braced")
+        op = m.group("op")
+        val = m.group("val")
+        sig_expl = (m.group("sigexpl") or m.group("sigexpl2") or "").strip()
+        val_expl = (m.group("valexpl") or m.group("valexpl2") or "").strip()
+        # Build combined explanation
+        if val_expl and sig_expl:
+            expl = f"{val_expl}-{sig_expl}"
+        else:
+            expl = val_expl or sig_expl
+        return f"{braced} {op} {val}: {expl}" if expl else f"{braced} {op} {val}"
+
+    pattern_sig_annot_full = re.compile(
+        r"(?P<braced>\{[^{}]+\})\s*(?:\(\s*(?P<sigexpl>[^()（）:]+?)\s*\)|（\s*(?P<sigexpl2>[^()（）:]+?)\s*）)\s*"
+        r"(?P<op>==|>=|<=|!=|=|>|<)\s*"
+        r"(?P<val>[^\s:()（）]+)\s*"
+        r"(?:\(\s*(?P<valexpl>[^()（）:]+?)\s*\)|（\s*(?P<valexpl2>[^()（）:]+?)\s*）)?"
+        r"(?=(?:\s*(?:&&|\|\|)|\s*$))"
+    )
+    s_new = pattern_sig_annot_full.sub(repl_sig_annot_full, s)
+
+    # Fallback: only signal annotation before operator, no value explanation present
+    def repl_sig_annot_simple(m: re.Match) -> str:
+        braced = m.group("braced")
+        op = m.group("op")
+        val = m.group("val")
+        sig_expl = (m.group("sigexpl") or m.group("sigexpl2") or "").strip()
+        return f"{braced} {op} {val}: {sig_expl}" if sig_expl else f"{braced} {op} {val}"
+
+    pattern_sig_annot_simple = re.compile(
+        r"(?P<braced>\{[^{}]+\})\s*(?:\(\s*(?P<sigexpl>[^()（）:]+?)\s*\)|（\s*(?P<sigexpl2>[^()（）:]+?)\s*）)\s*"
+        r"(?P<op>==|>=|<=|!=|=|>|<)\s*"
+        r"(?P<val>[^\s:()（）]+)"
+        r"(?=(?:\s*(?:&&|\|\|)|\s*$))"
+    )
+    s_new = pattern_sig_annot_simple.sub(repl_sig_annot_simple, s_new)
+
     # 1) Parentheses explanation: {X} == 0x0 (Unavailable) / （Unavailable） -> {X} == 0x0: Unavailable
     def repl_paren(m: re.Match) -> str:
         head = m.group("head")
@@ -73,7 +118,7 @@ def _normalize_explanation_suffix_once(text: str) -> str:
     pattern_paren = re.compile(
         _EXPL_HEAD_RE + r"(?P<val>[^\s:()（）]+)\s*(?:\(|（)\s*(?P<expl>[^()（）:]+?)\s*(?:\)|）)"
     )
-    s_new = pattern_paren.sub(repl_paren, s)
+    s_new = pattern_paren.sub(repl_paren, s_new)
 
     # 2) No-space appended explanation: {X} == 0x0Unavailable -> {X} == 0x0: Unavailable
     def repl_nospace(m: re.Match) -> str:
@@ -110,7 +155,7 @@ def _normalize_explanation_suffix_once(text: str) -> str:
     s_new = pattern_comma.sub(repl_comma, s_new)
 
     # Handle quoted explanation after the value:
-    #   {X} = 0x3C "请控制车辆，注意环境变化" -> {X} = 0x3C:"请控制车辆，注意环境变化"
+    #   {X} = 0x3C "请控制车辆，注意环境变化" -> {X} = 0x3C:\"请控制车辆，注意环境变化\"
     def repl_quoted(m: re.Match) -> str:
         head = m.group("head")
         val = m.group("val")
