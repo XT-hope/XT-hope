@@ -160,6 +160,22 @@ def handle_parse_conditions_item(item: str) -> str:
     - Do not split when slash is inside parentheses: "=0x3(Resume/+)" stays intact
     - Normalize "EV:10%" -> "10%:EV" and similarly for other label:value to value:label when building comparisons
     """
+    # If there is descriptive text before a braced signal comparison, insert ':' between them
+    def insert_colon_before_signal_if_prefixed(text: str) -> str:
+        m = re.search(r"(?P<prefix>.*?\S)\s+(?=\{[^{}]+\}\s*(?:==|>=|<=|!=|=|>|<))", text)
+        if not m:
+            return text
+        prefix = m.group("prefix")
+        last_char = prefix[-1]
+        # Skip if prefix already ends with a colon or is immediately before with grouping/boolean tokens
+        if last_char in (':', '：', '(', '（', '[', '【'):
+            return text
+        if prefix.endswith('&&') or prefix.endswith('||'):
+            return text
+        return prefix + ':' + text[m.end():].lstrip()
+
+    item = insert_colon_before_signal_if_prefixed(item)
+
     # Only wrap if there are explicit boolean operators to preserve grouping
     needs_wrap = any(tok in item for tok in ("&&", "||", "&"))
 
@@ -260,7 +276,7 @@ def handle_parse_conditions_item(item: str) -> str:
         pre = item[:slash_idx].strip()
         post = item[slash_idx + 1:].strip()
 
-        # Extract header and relation from the left part (before first '/')
+        # Extract header and relation from the left part (before '/')
         ops = ["==", ">=", "<=", "!=", ">", "<", "="]
         header = None
         op_found = None
@@ -279,7 +295,7 @@ def handle_parse_conditions_item(item: str) -> str:
             rhs_alternatives = [normalize_label_value(v) for v in rhs_alternatives_raw if v.strip()]
             # Build OR expression for all alternatives
             exprs = [f"{header} {op_found} {val}" for val in rhs_alternatives]
-            out = f"({" || ".join(exprs)})"
+            out = f"({' || '.join(exprs)})"
             return normalize_explanation_suffix(out)
 
     out = f"({item})" if needs_wrap else item
