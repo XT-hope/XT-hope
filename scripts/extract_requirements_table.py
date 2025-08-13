@@ -58,11 +58,24 @@ def split_conditions_by_or(cond: str) -> List[str]:
 # New: normalize malformed explanation suffixes that describe RHS values of comparisons.
 # Only triggers for patterns starting with a braced signal and a comparison operator,
 # so pure text conditions are unaffected.
-_EXPL_HEAD_RE = r"(?P<head>\{[^{}]+\}\s*(?:==|>=|<=|!=|=|>|<)\s*)"
+_EXPL_HEAD_RE = r"(?P<head>\{[^{}]+\}\s*(?:==|>=|<=|!=|=|>|<|＞＝|＜＝|≥|≤|≠|＞|＜|＝)\s*)"
 
 
 def _normalize_explanation_suffix_once(text: str) -> str:
     s = text
+
+    # Helper: insert a space between a leading numeric token and a recognized unit
+    # Example: 135kph -> 135 kph; 105KPH -> 105 KPH; 500ms (kept if used as value)
+    unit_compact_value_re = re.compile(
+        r"^(?P<num>[-+]?\d+(?:\.\d+)?)\s*(?P<unit>(?:[A-Za-z°µ]+(?:/[A-Za-z0-9°µ²]+)+)|(?:[A-Za-z°µ]+))$",
+        re.IGNORECASE,
+    )
+
+    def insert_space_number_unit(val: str) -> str:
+        m = unit_compact_value_re.match(val)
+        if not m:
+            return val
+        return f"{m.group('num')} {m.group('unit')}"
 
     # 0) Handle annotation immediately after braced signal name before the operator.
     #    Example: {X}(描述) == 0x1(Active) -> {X} == 0x1: Active-描述
@@ -70,7 +83,7 @@ def _normalize_explanation_suffix_once(text: str) -> str:
     def repl_sig_annot_full(m: re.Match) -> str:
         braced = m.group("braced")
         op = m.group("op")
-        val = m.group("val")
+        val = insert_space_number_unit(m.group("val"))
         sig_expl = (m.group("sigexpl") or m.group("sigexpl2") or "").strip()
         val_expl = (m.group("valexpl") or m.group("valexpl2") or "").strip()
         # Build combined explanation
@@ -82,7 +95,7 @@ def _normalize_explanation_suffix_once(text: str) -> str:
 
     pattern_sig_annot_full = re.compile(
         r"(?P<braced>\{[^{}]+\})\s*(?:\(\s*(?P<sigexpl>[^()（）:]+?)\s*\)|（\s*(?P<sigexpl2>[^()（）:]+?)\s*）)\s*"
-        r"(?P<op>==|>=|<=|!=|=|>|<)\s*"
+        r"(?P<op>==|>=|<=|!=|=|>|<|＞＝|＜＝|≥|≤|≠|＞|＜|＝)\s*"
         r"(?P<val>[^\s:()（）]+)\s*"
         r"(?:\(\s*(?P<valexpl>[^()（）:]+?)\s*\)|（\s*(?P<valexpl2>[^()（）:]+?)\s*）)?"
         r"(?=(?:\s*(?:&&|\|\|)|\s*$))"
@@ -93,13 +106,13 @@ def _normalize_explanation_suffix_once(text: str) -> str:
     def repl_sig_annot_simple(m: re.Match) -> str:
         braced = m.group("braced")
         op = m.group("op")
-        val = m.group("val")
+        val = insert_space_number_unit(m.group("val"))
         sig_expl = (m.group("sigexpl") or m.group("sigexpl2") or "").strip()
         return f"{braced} {op} {val}: {sig_expl}" if sig_expl else f"{braced} {op} {val}"
 
     pattern_sig_annot_simple = re.compile(
         r"(?P<braced>\{[^{}]+\})\s*(?:\(\s*(?P<sigexpl>[^()（）:]+?)\s*\)|（\s*(?P<sigexpl2>[^()（）:]+?)\s*）)\s*"
-        r"(?P<op>==|>=|<=|!=|=|>|<)\s*"
+        r"(?P<op>==|>=|<=|!=|=|>|<|＞＝|＜＝|≥|≤|≠|＞|＜|＝)\s*"
         r"(?P<val>[^\s:()（）]+)"
         r"(?=(?:\s*(?:&&|\|\|)|\s*$))"
     )
@@ -108,7 +121,7 @@ def _normalize_explanation_suffix_once(text: str) -> str:
     # 1) Parentheses explanation: {X} == 0x0 (Unavailable) / （Unavailable） -> {X} == 0x0: Unavailable
     def repl_paren(m: re.Match) -> str:
         head = m.group("head")
-        val = m.group("val")
+        val = insert_space_number_unit(m.group("val"))
         expl = m.group("expl").strip()
         # Skip only if explanation clearly contains boolean operators to avoid breaking expressions
         if "&&" in expl or "||" in expl:
@@ -123,8 +136,14 @@ def _normalize_explanation_suffix_once(text: str) -> str:
     # 2) No-space appended explanation: {X} == 0x0Unavailable -> {X} == 0x0: Unavailable
     def repl_nospace(m: re.Match) -> str:
         head = m.group("head")
-        val = m.group("val")
+        val = insert_space_number_unit(m.group("val"))
         expl = m.group("expl").strip()
+        # Guard: if immediately followed by a '/', likely a measurement like 3m/s²; skip
+        s_full: str = m.string
+        if m.end() < len(s_full):
+            next_char = s_full[m.end()]
+            if next_char in "/²^":
+                return m.group(0)
         return f"{head}{val}: {expl}"
 
     pattern_nospace = re.compile(
@@ -139,7 +158,7 @@ def _normalize_explanation_suffix_once(text: str) -> str:
     #    {X} = 0x1: Active，debounce 1000ms -> {X} = 0x1: Active: debounce 1000ms
     def repl_comma(m: re.Match) -> str:
         head = m.group("head")
-        val = m.group("val").strip()
+        val = insert_space_number_unit(m.group("val").strip())
         expl = m.group("expl").strip()
         if not expl:
             return m.group(0)
@@ -158,7 +177,7 @@ def _normalize_explanation_suffix_once(text: str) -> str:
     #   {X} = 0x3C "请控制车辆，注意环境变化" -> {X} = 0x3C:\"请控制车辆，注意环境变化\"
     def repl_quoted(m: re.Match) -> str:
         head = m.group("head")
-        val = m.group("val")
+        val = insert_space_number_unit(m.group("val"))
         expl = (m.group("expl1") or m.group("expl2") or "").strip()
         return f"{head}{val}:\"{expl}\""
 
@@ -173,7 +192,7 @@ def _normalize_explanation_suffix_once(text: str) -> str:
     #    Guard against splitting hex sequences where a word follows immediately after a single hex digit (e.g., 0x1Enabled)
     def repl_space(m: re.Match) -> str:
         head = m.group("head")
-        val = m.group("val")
+        val = insert_space_number_unit(m.group("val"))
         expl = m.group("expl").strip()
         # Guard against common keywords that are not explanations
         if expl.lower() in {"and", "or"}:
@@ -264,8 +283,6 @@ def handle_parse_conditions_item(item: str) -> str:
     def find_top_level_slash(s: str, cutoff_idx: Optional[int] = None) -> int:
         depth = 0
         for idx, ch in enumerate(s):
-            if cutoff_idx is not None and idx >= cutoff_idx:
-                break
             if ch in ('(', '（'):
                 depth += 1
             elif ch in (')', '）'):
@@ -335,12 +352,10 @@ def handle_parse_conditions_item(item: str) -> str:
         return -1
 
     op_rhs_idx = find_op_rhs_start(item)
-    colon_cutoff = find_first_top_level_ascii_colon_from(item, op_rhs_idx) if op_rhs_idx is not None else -1
-
-    slash_idx = find_top_level_slash(item, colon_cutoff if colon_cutoff != -1 else None)
+    slash_idx = find_top_level_slash(item)
     if slash_idx != -1:
         pre = item[:slash_idx].strip()
-        post = item[slash_idx + 1:(colon_cutoff if colon_cutoff != -1 else len(item))].strip()
+        post = item[slash_idx + 1:].strip()
 
         # Extract header and relation from the left part (before '/')
         ops = ["==", ">=", "<=", "!=", ">", "<", "="]

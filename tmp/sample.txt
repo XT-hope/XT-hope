@@ -1,0 +1,6 @@
+2.3.2.5.4 车速高于抑制车速上限【D-SM-SWR2025061813】
+IF 
+  {Speed_Signal_151_S}> 135kph（国内ACC/ICC/HNOA）or {Speed_Signal_151_S}> 105kph（国内CNOA）
+  {Speed_Signal_151_S}> 155kph（海外）
+THEN
+  {DA_Inhibit} = 5
