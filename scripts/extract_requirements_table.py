@@ -45,6 +45,8 @@ def normalize_text(text: str) -> str:
     text = text.strip()
     text = strip_brackets_pair(text)
     text = strip_braces(text)
+    # Normalize Chinese colon to ASCII for consistent parsing
+    text = text.replace("：", ":")
     # Strip erroneous/uniform Unavailable annotations
     text = strip_unavailable_annotation(text)
     # Normalize inner whitespace
@@ -527,6 +529,17 @@ def extract_rows(text: str) -> List[Tuple[str, str, str, str, str]]:
             hil_init = normalize_text(hil_init)
             cond_str = normalize_text(cond_str)
             results_str = normalize_text(results_str)
+
+            # Handle transition pattern: "<Var> from <A> to <B>"
+            m_trans = re.match(r"^(.+?)\s+from\s+(.+?)\s+to\s+(.+)$", results_str, flags=re.IGNORECASE)
+            if m_trans:
+                head = normalize_text(m_trans.group(1))
+                from_msg = normalize_text(m_trans.group(2))
+                to_msg = normalize_text(m_trans.group(3))
+                # Update HIL初始条件 to include the 'from' value; keep existing hil_init prefix if present
+                hil_init = f"{hil_init} : {head} = {from_msg}" if hil_init else f"{head} = {from_msg}"
+                # Set expected result to the 'to' value
+                results_str = f"{head} = {to_msg}"
 
             # Append row: 需求ID, 测试点, HIL初始条件, HIL测试步骤, HIL预期结果
             rows.append((req_id, test_point, hil_init, cond_str, results_str))
