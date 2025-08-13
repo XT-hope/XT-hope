@@ -109,6 +109,20 @@ def _normalize_explanation_suffix_once(text: str) -> str:
     )
     s_new = pattern_comma.sub(repl_comma, s_new)
 
+    # Handle quoted explanation after the value:
+    #   {X} = 0x3C "请控制车辆，注意环境变化" -> {X} = 0x3C:"请控制车辆，注意环境变化"
+    def repl_quoted(m: re.Match) -> str:
+        head = m.group("head")
+        val = m.group("val")
+        expl = (m.group("expl1") or m.group("expl2") or "").strip()
+        return f"{head}{val}:\"{expl}\""
+
+    pattern_quoted = re.compile(
+        _EXPL_HEAD_RE
+        + r"(?P<val>[^\s:()（）\"]+)\s*(?:\"(?P<expl1>[^\"]+)\"|“(?P<expl2>[^”]+)”)"
+    )
+    s_new = pattern_quoted.sub(repl_quoted, s_new)
+
     # 4) Space separated explanation (ensure it ends before &&, ||, or end):
     #    {X} == 0x0 Unavailable -> {X} == 0x0: Unavailable
     #    Guard against splitting hex sequences where a word follows immediately after a single hex digit (e.g., 0x1Enabled)
