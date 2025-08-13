@@ -51,6 +51,70 @@ def split_conditions_by_or(cond: str) -> List[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+# New: normalize malformed explanation suffixes that describe RHS values of comparisons.
+# Only triggers for patterns starting with a braced signal and a comparison operator,
+# so pure text conditions are unaffected.
+_EXPL_HEAD_RE = r"(?P<head>\{[^{}]+\}\s*(?:==|>=|<=|!=|=|>|<)\s*)"
+
+
+def _normalize_explanation_suffix_once(text: str) -> str:
+    s = text
+
+    # 1) Parentheses explanation: {X} == 0x0 (Unavailable) / （Unavailable） -> {X} == 0x0: Unavailable
+    def repl_paren(m: re.Match) -> str:
+        head = m.group("head")
+        val = m.group("val")
+        expl = m.group("expl").strip()
+        # Skip if explanation contains characters that usually denote options or operators
+        if any(ch in expl for ch in "/+|&"):  # e.g., (Resume/+)
+            return m.group(0)
+        return f"{head}{val}: {expl}"
+
+    pattern_paren = re.compile(
+        _EXPL_HEAD_RE + r"(?P<val>[^\s:()（）]+)\s*(?:\(|（)\s*(?P<expl>[^()（）:]+?)\s*(?:\)|）)"
+    )
+    s_new = pattern_paren.sub(repl_paren, s)
+
+    # 2) No-space appended explanation: {X} == 0x0Unavailable -> {X} == 0x0: Unavailable
+    def repl_nospace(m: re.Match) -> str:
+        head = m.group("head")
+        val = m.group("val")
+        expl = m.group("expl").strip()
+        return f"{head}{val}: {expl}"
+
+    pattern_nospace = re.compile(
+        _EXPL_HEAD_RE
+        + r"(?P<val>(?:0x[0-9A-Fa-f]+?(?=(?:[A-Z][a-z])|[^0-9A-Fa-f]))|(?:[-+]?\d+(?:\.[\d]+)?%?)(?![xX][0-9A-Fa-f]))"
+        + r"(?P<expl>(?:[A-Za-z][A-Za-z0-9_\-]*|[\u4e00-\u9fa5][\u4e00-\u9fa5A-Za-z0-9_\-]*)(?:\s+[A-Za-z\u4e00-\u9fa5][^:()（）]*)?)"
+    )
+    s_new = pattern_nospace.sub(repl_nospace, s_new)
+
+    # 3) Space separated explanation (ensure it ends before &&, ||, or end):
+    #    {X} == 0x0 Unavailable -> {X} == 0x0: Unavailable
+    #    Guard against splitting hex sequences where a word follows immediately after a single hex digit (e.g., 0x1Enabled)
+    def repl_space(m: re.Match) -> str:
+        head = m.group("head")
+        val = m.group("val")
+        expl = m.group("expl").strip()
+        # Guard against common keywords that are not explanations
+        if expl.lower() in {"and", "or"}:
+            return m.group(0)
+        return f"{head}{val}: {expl}"
+
+    pattern_space = re.compile(
+        _EXPL_HEAD_RE
+        + r"(?P<val>[^\s:()（）]+)\s+(?P<expl>[A-Za-z\u4e00-\u9fa5][^:()（）]*?)\s*(?=(?:&&|\|\||$))"
+    )
+    s_new = pattern_space.sub(repl_space, s_new)
+
+    return s_new
+
+
+def normalize_explanation_suffix(text: str) -> str:
+    # Single pass is sufficient and avoids double-handling like '0x0' -> '0: x0'
+    return _normalize_explanation_suffix_once(text)
+
+
 BRANCH_HEADER_RE = re.compile(r"^\s*\d+\.\s*(以下条件同时满足|以下条件满足其一)\s*[:：]?\s*$")
 SUBITEM_RE = re.compile(r"^\s{2,}\d+\.\s*(.+)$")
 
@@ -111,9 +175,11 @@ def handle_parse_conditions_item(item: str) -> str:
 
             left_expr = f"{header} {op_found} {left_val}"
             right_expr = f"{header} {op_found} {right_val}"
-            return f"({left_expr} || {right_expr})"
+            out = f"({left_expr} || {right_expr})"
+            return normalize_explanation_suffix(out)
 
-    return f"({item})" if needs_wrap else item
+    out = f"({item})" if needs_wrap else item
+    return normalize_explanation_suffix(out)
 
 
 def parse_conditions(lines: List[str], start_idx: int) -> Tuple[str, int]:
@@ -406,6 +472,7 @@ def parse_results(lines: List[str], start_idx: int) -> Tuple[str, int]:
         # Capture meaningful content lines
         m = re.match(r"^\s*\d+\.\s*(.*)$", line)
         item = m.group(1).strip() if m else line.strip()
+        item = normalize_explanation_suffix(item)
 
         if current == "ELSE":
             results_else.append(item)
