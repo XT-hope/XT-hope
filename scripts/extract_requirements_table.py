@@ -98,10 +98,14 @@ def _normalize_explanation_suffix_once(text: str) -> str:
         expl = m.group("expl").strip()
         if not expl:
             return m.group(0)
+        # If the value already contains a colon (e.g., "0x1: Active"),
+        # treat the comma suffix as an external annotation and do not convert
+        if ":" in val or "：" in val:
+            return m.group(0)
         return f"{head}{val}: {expl}"
 
     pattern_comma = re.compile(
-        _EXPL_HEAD_RE + r"(?P<val>[^,，()（）\"]+?)\s*[，,]\s*(?P<expl>[^()（）\"]*?)\s*(?=(?:&&|\|\||$))"
+        _EXPL_HEAD_RE + r"(?P<val>[^,，:：()（）\"]+?)\s*[，,]\s*(?P<expl>[^()（）\"]*?)\s*(?=(?:&&|\|\||$))"
     )
     s_new = pattern_comma.sub(repl_comma, s_new)
 
