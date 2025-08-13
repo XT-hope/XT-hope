@@ -1,0 +1,5 @@
+2.3.2.5.22 CDP激活【D-SM-SWR2025061832】
+IF
+  {AutomaticBrakingActive}(CDP功能激活状态) == 0x1(Active) 
+THEN
+  {DA_Inhibit} = 5
