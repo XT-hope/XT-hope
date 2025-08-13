@@ -1,0 +1,2 @@
+需求ID,测试点,HIL初始条件,HIL测试步骤,HIL预期结果
+D-SM-SWR2025061813,2.3.2.5.4 车速高于抑制车速上限,,Speed_Signal_151_S> 135 kph: 国内ACC/ICC/HNOA || Speed_Signal_151_S> 105 kph: 国内CNOA && Speed_Signal_151_S> 155 kph: 海外,DA_Inhibit = 5
