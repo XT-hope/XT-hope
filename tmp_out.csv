@@ -1,3 +1,0 @@
-需求ID,测试点,HIL初始条件,HIL测试步骤,HIL预期结果
-D-SM-SWR2025061942,3.4.6 Standstill_Active mode->Standstill_Wait mode (T6),Standstill_Active mode->Standstill_Wait mode (T6),当前工况不允许静止起步&&(跟停前车时间超过2.5min且在3min内 || 跟停前车后自车与前车之间有闯入者(VRU) || 跟停后跟随车辆目标突然消失),ACC_Mode_Display1_29C_S from 0x6: Standstill_Active mode to 0x7: Standstill_Wait mode
-REQ-1,4.1.2 Some title,Some title,VCU_PtTqAvl == 0x0: Unavailable && VCU_Signal == 0x1: Enabled && X == 0x2: Fault && Y == 0x3: Unavailable && 纯文字条件，不应添加解释符号,Display = 0x1: Enabled && Text only result || Display = 0x2: Disabled
