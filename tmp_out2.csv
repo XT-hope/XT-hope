@@ -1,2 +1,0 @@
-需求ID,测试点,HIL初始条件,HIL测试步骤,HIL预期结果
-,,,A == 0x0: Unavailable && B == 0x1: Enabled && C == 0x2: Fault && D == 0x3: Unavailable && 这是纯文字条件,Out = 0x1: Enabled && Text only result || Out = 0x2: Disabled
