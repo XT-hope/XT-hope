@@ -1,2 +1,0 @@
-需求ID,测试点,HIL初始条件,HIL测试步骤,HIL预期结果
-D-SM-SWR2025061832,2.3.2.5.22 CDP激活,,AutomaticBrakingActive == 0x1: Active-CDP功能激活状态,DA_Inhibit = 5
