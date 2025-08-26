@@ -40,14 +40,14 @@ class OpenDriveBuilder:
 		if n_left > 0:
 			left = ET.SubElement(lane_section, "left")
 			for i in range(n_left):
-				lane = ET.SubElement(left, "lane", id=f"{-1 - i}", type="driving", level="false")
+				lane = ET.SubElement(left, "lane", id=f"{1 + i}", type="driving", level="false")
 				ET.SubElement(lane, "width", sOffset="0.000", a=f"{lane_cfg.lane_width_m:.3f}", b="0", c="0", d="0")
 				ET.SubElement(lane, "roadMark", sOffset="0.000", type=lane_cfg.mark_type, weight="standard", color="standard", material="standard", width="0.13")
 		# Right side (positive ids)
 		if n_right > 0:
 			right = ET.SubElement(lane_section, "right")
 			for i in range(n_right):
-				lane = ET.SubElement(right, "lane", id=f"{1 + i}", type="driving", level="false")
+				lane = ET.SubElement(right, "lane", id=f"{-1 - i}", type="driving", level="false")
 				ET.SubElement(lane, "width", sOffset="0.000", a=f"{lane_cfg.lane_width_m:.3f}", b="0", c="0", d="0")
 				ET.SubElement(lane, "roadMark", sOffset="0.000", type=lane_cfg.mark_type, weight="standard", color="standard", material="standard", width="0.13")
 		if signals_s:
@@ -95,14 +95,14 @@ class OpenDriveBuilder:
 			if n_left > 0:
 				left = ET.SubElement(lane_section, "left")
 				for i in range(n_left):
-					lane = ET.SubElement(left, "lane", id=f"{-1 - i}", type="driving", level="false")
+					lane = ET.SubElement(left, "lane", id=f"{1 + i}", type="driving", level="false")
 					ET.SubElement(lane, "width", sOffset="0.000", a=f"{lane_cfg.lane_width_m:.3f}", b="0", c="0", d="0")
 					ET.SubElement(lane, "roadMark", sOffset="0.000", type=lane_cfg.mark_type, weight="standard", color="standard", material="standard", width="0.13")
 			# Right side
 			if n_right > 0:
 				right = ET.SubElement(lane_section, "right")
 				for i in range(n_right):
-					lane = ET.SubElement(right, "lane", id=f"{1 + i}", type="driving", level="false")
+					lane = ET.SubElement(right, "lane", id=f"{-1 - i}", type="driving", level="false")
 					ET.SubElement(lane, "width", sOffset="0.000", a=f"{lane_cfg.lane_width_m:.3f}", b="0", c="0", d="0")
 					ET.SubElement(lane, "roadMark", sOffset="0.000", type=lane_cfg.mark_type, weight="standard", color="standard", material="standard", width="0.13")
 			roads.append(road_elem)
@@ -132,12 +132,12 @@ class OpenDriveBuilder:
 					ET.SubElement(link_out, "predecessor", elementType="junction", elementId="1", contactPoint="end")
 					# junction connection with laneLinks (map same ids on both sides)
 					conn = ET.SubElement(junc, "connection", id=str(i+1), incomingRoad=road_ids[i], connectingRoad=road_ids[i+1], contactPoint="end")
-					# Left side (negative ids)
+					# Left side (positive ids)
 					for li in range(1, (lane_cfg.num_lanes_left if lane_cfg.num_lanes_left else 0) + 1):
-						ET.SubElement(conn, "laneLink", _from=f"{-li}", to=f"{-li}")
-					# Right side (positive ids)
+						ET.SubElement(conn, "laneLink", _from=f"{li}", to=f"{li}")
+					# Right side (negative ids)
 					for ri in range(1, (lane_cfg.num_lanes_right if lane_cfg.num_lanes_right else (lane_cfg.num_lanes if lane_cfg.num_lanes else 0)) + 1):
-						ET.SubElement(conn, "laneLink", _from=f"{ri}", to=f"{ri}")
+						ET.SubElement(conn, "laneLink", _from=f"{-ri}", to=f"{-ri}")
 					consumed[i] = True
 					consumed[i+1] = True
 					consumed[i+2] = True
