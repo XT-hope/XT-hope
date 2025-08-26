@@ -89,6 +89,7 @@ class OpenDriveBuilder:
 			length = self._compute_length(traj)
 			road_elem = ET.SubElement(root, "road", id=str(idx+1), name=("conn_" if is_conn else "road_") + str(idx+1), length=f"{length:.3f}", junction=("1" if is_conn else "-1"))
 			plan = ET.SubElement(road_elem, "planView")
+			# For connecting segments, we will consider emitting line-arc-line geometry based on adjacent roads
 			self._emit_plan_view_param_poly3(plan, traj)
 			lanes = ET.SubElement(road_elem, "lanes")
 			lane_section = ET.SubElement(lanes, "laneSection", s="0.000")
@@ -99,8 +100,12 @@ class OpenDriveBuilder:
 			n_right = lane_cfg.num_lanes_right if lane_cfg.num_lanes_right is not None else 0
 			if (n_left <= 0 and n_right <= 0) and lane_cfg.num_lanes > 0:
 				n_right = lane_cfg.num_lanes
-			# mirror if only one side present
-			if lane_cfg.mirror_missing_side:
+			# For connecting segments, default to single right-side lane unless explicitly specified
+			if is_conn:
+				n_left = 0
+				n_right = max(1, n_right if n_left > 0 or n_right > 0 else 1)
+			# mirror if only one side present (non-connecting only)
+			if lane_cfg.mirror_missing_side and not is_conn:
 				if n_left > 0 and n_right <= 0:
 					n_right = n_left
 				elif n_right > 0 and n_left <= 0:
@@ -134,34 +139,33 @@ class OpenDriveBuilder:
 					# create junction if needed
 					if junc is None:
 						junc = ET.SubElement(root, "junction", id="1", name="j1")
-					# incoming -> junction
+					# incoming -> junction at end
 					link_in = ET.SubElement(roads[i], "link")
-					ET.SubElement(link_in, "successor", elementType="junction", elementId="1", contactPoint="start")
+					ET.SubElement(link_in, "successor", elementType="junction", elementId="1", contactPoint="end")
 					# connecting road predecessor/ successor
 					link_conn = ET.SubElement(roads[i+1], "link")
 					ET.SubElement(link_conn, "predecessor", elementType="road", elementId=road_ids[i], contactPoint="end")
 					ET.SubElement(link_conn, "successor", elementType="road", elementId=road_ids[i+2], contactPoint="start")
-					# outgoing road predecessor from junction
+					# outgoing road predecessor from junction at start
 					link_out = ET.SubElement(roads[i+2], "link")
-					ET.SubElement(link_out, "predecessor", elementType="junction", elementId="1", contactPoint="end")
-					# lane counts for links (respect mirroring)
-					j_left = lane_cfg.num_lanes_left if lane_cfg.num_lanes_left is not None else 0
-					j_right = lane_cfg.num_lanes_right if lane_cfg.num_lanes_right is not None else 0
-					if (j_left <= 0 and j_right <= 0) and lane_cfg.num_lanes > 0:
-						j_right = lane_cfg.num_lanes
-					if lane_cfg.mirror_missing_side:
-						if j_left > 0 and j_right <= 0:
-							j_right = j_left
-						elif j_right > 0 and j_left <= 0:
-							j_left = j_right
-					# junction connection with laneLinks (map same ids on both sides)
+					ET.SubElement(link_out, "predecessor", elementType="junction", elementId="1", contactPoint="start")
+					# Determine movement type based on heading delta
+					mov = self._classify_movement(segments[i][0], segments[i+2][0])
+					# junction connection with laneLinks (map based on lane responsibility policy)
 					conn = ET.SubElement(junc, "connection", id=str(i+1), incomingRoad=road_ids[i], connectingRoad=road_ids[i+1], contactPoint="end")
-					# Left side (positive ids)
-					for li in range(1, j_left + 1):
-						ET.SubElement(conn, "laneLink", _from=f"{li}", to=f"{li}")
-					# Right side (negative ids)
-					for ri in range(1, j_right + 1):
-						ET.SubElement(conn, "laneLink", _from=f"{-ri}", to=f"{-ri}")
+					# Decide incoming lane ids to map
+					in_right = lane_cfg.num_lanes_right if (lane_cfg.num_lanes_right and lane_cfg.num_lanes_right > 0) else (lane_cfg.num_lanes if lane_cfg.num_lanes > 0 else 1)
+					from_ids = self._pick_incoming_lanes_for_movement(mov, in_right)
+					# Connecting road right-side lane ids start at -1
+					to_ids = ["-1"]
+					# Emit laneLinks
+					for k in range(min(len(from_ids), len(to_ids))):
+						ET.SubElement(conn, "laneLink", _from=f"{from_ids[k]}", to=f"{to_ids[k]}")
+					# Replace connecting geometry with line-arc-line when feasible
+					try:
+						self._rewrite_connecting_plan_line_arc_line(roads[i+1].find("planView"), segments[i][0], segments[i+2][0], mov)
+					except Exception:
+						pass
 					consumed[i] = True
 					consumed[i+1] = True
 					consumed[i+2] = True
@@ -219,15 +223,9 @@ class OpenDriveBuilder:
 			ds = math.hypot(trajectory_xy[i][0]-trajectory_xy[i-1][0], trajectory_xy[i][1]-trajectory_xy[i-1][1])
 			s_vals.append(s_vals[-1] + ds)
 		length = s_vals[-1]
-		if length <= 1e-6:
-			# Degenerate zero-length
-			x0, y0 = trajectory_xy[0]
-			geom = ET.SubElement(plan_elem, "geometry", s="0.000", x=f"{x0:.3f}", y=f"{y0:.3f}", hdg="0.000000", length="0.000")
-			ET.SubElement(geom, "paramPoly3", aU="0.0", bU="0.0", cU="0.0", dU="0.0", aV="0.0", bV="0.0", cV="0.0", dV="0.0", pRange="normalized")
-			return
 		x0, y0 = trajectory_xy[0]
-		x1, y1 = trajectory_xy[1]
-		hdg0 = self._heading(x0, y0, x1, y1)
+		x1, y1 = trajectory_xy[-1]
+		hdg0 = self._heading(trajectory_xy[0][0], trajectory_xy[0][1], trajectory_xy[1][0], trajectory_xy[1][1])
 		cos_h = math.cos(hdg0)
 		sin_h = math.sin(hdg0)
 		# If only two points, emit straight degenerate cubic
@@ -235,18 +233,15 @@ class OpenDriveBuilder:
 			geom = ET.SubElement(plan_elem, "geometry", s="0.000", x=f"{x0:.3f}", y=f"{y0:.3f}", hdg=f"{hdg0:.6f}", length=f"{length:.3f}")
 			ET.SubElement(geom, "paramPoly3", aU="0.0", bU=f"{length:.8f}", cU="0.0", dU="0.0", aV="0.0", bV="0.0", cV="0.0", dV="0.0", pRange="normalized")
 			return
-		# Normalize parameter p in [0,1]
-		p_vals = [sv/length for sv in s_vals]
-		u_vals: List[float] = []
-		v_vals: List[float] = []
+		# Fit cubic in local param p in [0,1]
+		p_vals = [s/length for s in s_vals]
+		u_vals = []
+		v_vals = []
 		for (x, y) in trajectory_xy:
 			dx = x - x0
 			dy = y - y0
-			u =  cos_h * dx + sin_h * dy
-			v = -sin_h * dx + cos_h * dy
-			u_vals.append(u)
-			v_vals.append(v)
-		# Fit cubic a + b p + c p^2 + d p^3
+			u_vals.append(dx * cos_h + dy * sin_h)
+			v_vals.append(-dx * sin_h + dy * cos_h)
 		try:
 			aU, bU, cU, dU = self._fit_cubic_least_squares(p_vals, u_vals)
 			aV, bV, cV, dV = self._fit_cubic_least_squares(p_vals, v_vals)
@@ -256,75 +251,165 @@ class OpenDriveBuilder:
 			ET.SubElement(geom, "paramPoly3", aU="0.0", bU=f"{length:.8f}", cU="0.0", dU="0.0", aV="0.0", bV="0.0", cV="0.0", dV="0.0", pRange="normalized")
 			return
 		geom = ET.SubElement(plan_elem, "geometry", s="0.000", x=f"{x0:.3f}", y=f"{y0:.3f}", hdg=f"{hdg0:.6f}", length=f"{length:.3f}")
-		ET.SubElement(geom, "paramPoly3", aU=f"{aU:.8f}", bU=f"{bU:.8f}", cU=f"{cU:.8f}", dU=f"{dU:.8f}", aV=f"{aV:.8f}", bV=f"{bV:.8f}", cV=f"{cV:.8f}", dV=f"{dV:.8f}", pRange="normalized")
+		ET.SubElement(geom, "paramPoly3", aU=f"{aU:.8f}", bU=f"{bU*length:.8f}", cU=f"{cU*length*length:.8f}", dU=f"{dU*length*length*length:.8f}", aV=f"{aV:.8f}", bV=f"{bV*length:.8f}", cV=f"{cV*length*length:.8f}", dV=f"{dV*length*length*length:.8f}", pRange="normalized")
 
 	@staticmethod
 	def _heading(x0: float, y0: float, x1: float, y1: float) -> float:
 		return math.atan2(y1 - y0, x1 - x0)
 
 	@staticmethod
-	def _fit_cubic_least_squares(p_vals: List[float], y_vals: List[float]) -> Tuple[float, float, float, float]:
-		"""Solve min||A c - y||^2 with A=[1 p p^2 p^3] via normal equations. Returns (a,b,c,d)."""
-		n = len(p_vals)
-		if n < 4:
-			# fall back to linear by padding zeros
-			p_vals = p_vals + [1.0]*(4-n)
-			y_vals = y_vals + [y_vals[-1]]*(4-n)
-		# Compute sums s_k = sum p^k
-		s = [0.0]*7
-		sp = [0.0]*4
-		for p, y in zip(p_vals, y_vals):
-			pk = 1.0
-			for k in range(7):
-				s[k] += pk
-				pk *= p
-			# y* p^k
-			pk = 1.0
-			for k in range(4):
-				sp[k] += y * pk
-				pk *= p
-		# Normal matrix (4x4)
-		M = [
-			[s[0], s[1], s[2], s[3]],
-			[s[1], s[2], s[3], s[4]],
-			[s[2], s[3], s[4], s[5]],
-			[s[3], s[4], s[5], s[6]],
-		]
-		b = [sp[0], sp[1], sp[2], sp[3]]
-		# Solve M c = b
-		coeffs = OpenDriveBuilder._solve_4x4(M, b)
-		return coeffs[0], coeffs[1], coeffs[2], coeffs[3]
+	def _normalize_angle(angle: float) -> float:
+		# Normalize to [-pi, pi]
+		a = (angle + math.pi) % (2.0 * math.pi) - math.pi
+		return a
+
+	def _classify_movement(self, incoming_xy: List[Tuple[float, float]], outgoing_xy: List[Tuple[float, float]]) -> str:
+		"""Classify movement type: 'straight', 'left', or 'right' based on heading delta."""
+		if len(incoming_xy) < 2 or len(outgoing_xy) < 2:
+			return "straight"
+		h_in = self._heading(incoming_xy[-2][0], incoming_xy[-2][1], incoming_xy[-1][0], incoming_xy[-1][1])
+		h_out = self._heading(outgoing_xy[0][0], outgoing_xy[0][1], outgoing_xy[1][0], outgoing_xy[1][1])
+		delta = self._normalize_angle(h_out - h_in)
+		deg = abs(math.degrees(delta))
+		if deg < 20.0:
+			return "straight"
+		return "left" if delta > 0.0 else "right"
 
 	@staticmethod
-	def _solve_4x4(M: List[List[float]], b: List[float]) -> List[float]:
-		# Gaussian elimination with partial pivoting for 4x4
-		A = [row[:] for row in M]
-		xb = b[:]
-		n = 4
+	def _pick_incoming_lanes_for_movement(movement: str, num_right_lanes: int) -> List[str]:
+		"""Pick incoming lane ids (negative) by policy: -1 rightmost curb, -2 middle, -3 inner near median."""
+		if num_right_lanes >= 3:
+			if movement == "right":
+				return ["-1"]
+			elif movement == "straight":
+				return ["-2"]
+			else:
+				return ["-3"]
+		elif num_right_lanes == 2:
+			if movement == "left":
+				return ["-2"]
+			else:
+				return ["-1"]
+		else:
+			return ["-1"]
+
+	def _rewrite_connecting_plan_line_arc_line(self, plan_elem: ET.Element | None, incoming_xy: List[Tuple[float, float]], outgoing_xy: List[Tuple[float, float]], movement: str) -> None:
+		"""Replace planView of a connecting road with line-arc-line geometry connecting lane-center endpoints.
+		Uses a default radius per movement and ensures tangency to incoming/outgoing headings.
+		"""
+		if plan_elem is None:
+			return
+		if len(incoming_xy) < 2 or len(outgoing_xy) < 2:
+			return
+		# Determine radius by movement
+		R = 15.0 if movement == "right" else (30.0 if movement == "left" else 80.0)
+		p_in = incoming_xy[-1]
+		p_in_prev = incoming_xy[-2]
+		p_out = outgoing_xy[0]
+		p_out_next = outgoing_xy[1]
+		h_in = self._heading(p_in_prev[0], p_in_prev[1], p_in[0], p_in[1])
+		h_out = self._heading(p_out[0], p_out[1], p_out_next[0], p_out_next[1])
+		delta = self._normalize_angle(h_out - h_in)
+		if abs(delta) < math.radians(5.0):
+			# Near-straight: keep original
+			return
+		# Compute tangent offsets
+		d = R * math.tan(abs(delta) / 2.0)
+		ux_in = math.cos(h_in)
+		uy_in = math.sin(h_in)
+		ux_out = math.cos(h_out)
+		uy_out = math.sin(h_out)
+		T_in = (p_in[0] + ux_in * d, p_in[1] + uy_in * d)
+		T_out = (p_out[0] - ux_out * d, p_out[1] - uy_out * d)
+		# Build offset lines for center intersection
+		sign = 1.0 if delta > 0.0 else -1.0
+		n_in = (-uy_in * sign, ux_in * sign)
+		n_out = (-uy_out * sign, ux_out * sign)
+		P1 = (T_in[0] + n_in[0] * R, T_in[1] + n_in[1] * R)
+		P2 = (T_out[0] + n_out[0] * R, T_out[1] + n_out[1] * R)
+		# Solve P1 + u_in * t1 = P2 + u_out * t2
+		den = ux_in * uy_out - uy_in * ux_out
+		if abs(den) < 1e-6:
+			return
+		t1 = ((P2[0] - P1[0]) * uy_out - (P2[1] - P1[1]) * ux_out) / den
+		C = (P1[0] + ux_in * t1, P1[1] + uy_in * t1)
+		# Validate distances
+		if abs(math.hypot(T_in[0]-C[0], T_in[1]-C[1]) - R) > 0.2 or abs(math.hypot(T_out[0]-C[0], T_out[1]-C[1]) - R) > 0.2:
+			# Geometric failure tolerance -> skip
+			return
+		# Clear existing planView children
+		for child in list(plan_elem):
+			plan_elem.remove(child)
+		# Emit line from p_in to T_in
+		S0 = 0.0
+		L1 = max(0.0, math.hypot(T_in[0]-p_in[0], T_in[1]-p_in[1]))
+		if L1 > 1e-3:
+			geom1 = ET.SubElement(plan_elem, "geometry", s=f"{S0:.3f}", x=f"{p_in[0]:.3f}", y=f"{p_in[1]:.3f}", hdg=f"{h_in:.6f}", length=f"{L1:.3f}")
+			ET.SubElement(geom1, "line")
+		# Emit arc from T_in to T_out
+		S1 = S0 + L1
+		ang_arc = abs(self._normalize_angle(math.atan2(T_out[1]-C[1], T_out[0]-C[0]) - math.atan2(T_in[1]-C[1], T_in[0]-C[0])))
+		Larc = R * ang_arc
+		if Larc > 1e-3:
+			geom2 = ET.SubElement(plan_elem, "geometry", s=f"{S1:.3f}", x=f"{T_in[0]:.3f}", y=f"{T_in[1]:.3f}", hdg=f"{math.atan2(T_in[1]-C[1], T_in[0]-C[0]) + (math.pi/2.0 * sign):.6f}", length=f"{Larc:.3f}")
+			ET.SubElement(geom2, "arc", curvature=f"{sign / R:.12f}")
+		# Emit line from T_out to p_out
+		S2 = S1 + Larc
+		L3 = max(0.0, math.hypot(p_out[0]-T_out[0], p_out[1]-T_out[1]))
+		if L3 > 1e-3:
+			geom3 = ET.SubElement(plan_elem, "geometry", s=f"{S2:.3f}", x=f"{T_out[0]:.3f}", y=f"{T_out[1]:.3f}", hdg=f"{h_out:.6f}", length=f"{L3:.3f}")
+			ET.SubElement(geom3, "line")
+
+	@staticmethod
+	def _fit_cubic_least_squares(p: List[float], y: List[float]) -> Tuple[float,float,float,float]:
+		"""Fit y ~ a + b*p + c*p^2 + d*p^3 in least squares sense."""
+		n = len(p)
+		if n != len(y) or n < 2:
+			raise ValueError("Invalid data for cubic fit")
+		# Build normal equations
+		S = [0.0] * 7
+		T = [0.0] * 4
 		for i in range(n):
-			# pivot
-			pivot = i
-			maxv = abs(A[i][i])
-			for r in range(i+1, n):
-				if abs(A[r][i]) > maxv:
-					maxv = abs(A[r][i])
-					pivot = r
-			if maxv < 1e-12:
-				raise ValueError("Singular matrix in fit")
-			if pivot != i:
-				A[i], A[pivot] = A[pivot], A[i]
-				xb[i], xb[pivot] = xb[pivot], xb[i]
-			# normalize
-			diag = A[i][i]
-			for c in range(i, n):
-				A[i][c] /= diag
-			xb[i] /= diag
-			# eliminate
-			for r in range(n):
-				if r == i:
-					continue
-				factor = A[r][i]
-				for c in range(i, n):
-					A[r][c] -= factor * A[i][c]
-				xb[r] -= factor * xb[i]
-		return xb
+			pi = p[i]
+			S[0] += 1.0
+			S[1] += pi
+			S[2] += pi**2
+			S[3] += pi**3
+			S[4] += pi**4
+			S[5] += pi**5
+			S[6] += pi**6
+			T[0] += y[i]
+			T[1] += y[i]*pi
+			T[2] += y[i]*pi**2
+			T[3] += y[i]*pi**3
+		# Solve 4x4 system using Gaussian elimination
+		A = [
+			[S[0], S[1], S[2], S[3]],
+			[S[1], S[2], S[3], S[4]],
+			[S[2], S[3], S[4], S[5]],
+			[S[3], S[4], S[5], S[6]],
+		]
+		b = [T[0], T[1], T[2], T[3]]
+		# Forward elimination
+		for i in range(4):
+			# Pivot
+			pivot = A[i][i]
+			if abs(pivot) < 1e-12:
+				raise ValueError("Singular matrix in cubic fit")
+			inv_p = 1.0 / pivot
+			for j in range(i, 4):
+				A[i][j] *= inv_p
+			b[i] *= inv_p
+			# Eliminate
+			for k in range(i+1, 4):
+				factor = A[k][i]
+				for j in range(i, 4):
+					A[k][j] -= factor * A[i][j]
+				b[k] -= factor * b[i]
+		# Back substitution
+		for i in range(3, -1, -1):
+			for k in range(i-1, -1, -1):
+				factor = A[k][i]
+				A[k][i] -= factor * A[i][i]
+				b[k] -= factor * b[i]
+		return b[0], b[1], b[2], b[3]
