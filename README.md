@@ -25,5 +25,6 @@ python3 -m xodr_converter.cli \
 - An XODR file with a single road composed of lane sections, lane markings, zebra objects, and inferred traffic lights near stops.
 
 ## Notes
-- Coordinate system is local ENU relative to the first GPS fix (spherical Earth approximation). Ego-frame points are rotated by GPS heading into ENU.
-- Intersections are represented by lane sections with lane marks set to `none` where BEV is missing.
+- Local ENU means: X axis points East, Y axis points North, Z axis Up, with origin at the first GPS fix. We use a local tangent-plane approximation suitable for short trips. Ego points (x forward, y left) are rotated by GPS heading (yaw clockwise from North) into this ENU frame.
+- Plan view (reference line) uses a parametric cubic polynomial (paramPoly3) fitted to the trajectory, with straight-line degenerate cubic when needed.
+- Junctions: When BEV indicates gaps at intersections, the trajectory is split and represented as multiple roads. Each connection through an intersection is modeled as a separate connecting road, and a junction element links incoming and connecting roads.

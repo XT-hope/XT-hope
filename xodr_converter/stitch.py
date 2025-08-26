@@ -126,3 +126,38 @@ def simplify_trajectory(poses: List[EgoPoseENU], tolerance_m: float = 0.3) -> Li
 	if not coords:
 		return []
 	return _douglas_peucker(coords, tolerance_m)
+
+
+def split_poses_by_gaps(poses: List[EgoPoseENU], s_vals: List[float], gaps: List[IntersectionGap]) -> List[Tuple[List[EgoPoseENU], bool, float]]:
+	"""Split the full pose list into contiguous segments around intersection gaps.
+	Returns a list of tuples: (segment_poses, is_connecting_segment, start_s_global).
+	A connecting segment spans within a detected BEV gap; a non-connecting segment is normal road.
+	"""
+	if not poses:
+		return []
+	# Map timestamps to indices for quick slicing aligned with gap ts
+	ts_to_index = {p.ts: i for i, p in enumerate(poses)}
+	segments: List[Tuple[List[EgoPoseENU], bool, float]] = []
+	cursor_idx = 0
+	for gap in gaps:
+		# Find nearest indices for gap start and end timestamps
+		# Fallback to nearest index if exact ts not found
+		start_i = min(range(len(poses)), key=lambda i: abs(poses[i].ts - gap.start_ts))
+		end_i = min(range(len(poses)), key=lambda i: abs(poses[i].ts - gap.end_ts))
+		if start_i < cursor_idx:
+			start_i = cursor_idx
+		if end_i < start_i:
+			end_i = start_i
+		# Non-connecting segment before the gap
+		if start_i > cursor_idx:
+			seg_poses = poses[cursor_idx:start_i+1]
+			segments.append((seg_poses, False, s_vals[cursor_idx]))
+		# Connecting segment across the gap
+		if end_i > start_i:
+			seg_poses_gap = poses[start_i:end_i+1]
+			segments.append((seg_poses_gap, True, s_vals[start_i]))
+		cursor_idx = end_i
+	# Tail segment after the last gap
+	if cursor_idx < len(poses) - 1:
+		segments.append((poses[cursor_idx:], False, s_vals[cursor_idx]))
+	return segments
