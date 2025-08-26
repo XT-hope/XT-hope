@@ -13,6 +13,8 @@ class LaneConfig:
 	num_lanes_right: int = 0
 	lane_width_m: float = 3.5
 	mark_type: str = "broken"
+	# If true and only one side is provided (>0), mirror the other side with the same count
+	mirror_missing_side: bool = True
 
 
 class OpenDriveBuilder:
@@ -36,14 +38,20 @@ class OpenDriveBuilder:
 		if (n_left <= 0 and n_right <= 0) and lane_cfg.num_lanes > 0:
 			# fallback: right-only using legacy field
 			n_right = lane_cfg.num_lanes
-		# Left side (negative ids)
+		# mirror if only one side present
+		if lane_cfg.mirror_missing_side:
+			if n_left > 0 and n_right <= 0:
+				n_right = n_left
+			elif n_right > 0 and n_left <= 0:
+				n_left = n_right
+		# Left side (positive ids)
 		if n_left > 0:
 			left = ET.SubElement(lane_section, "left")
 			for i in range(n_left):
 				lane = ET.SubElement(left, "lane", id=f"{1 + i}", type="driving", level="false")
 				ET.SubElement(lane, "width", sOffset="0.000", a=f"{lane_cfg.lane_width_m:.3f}", b="0", c="0", d="0")
 				ET.SubElement(lane, "roadMark", sOffset="0.000", type=lane_cfg.mark_type, weight="standard", color="standard", material="standard", width="0.13")
-		# Right side (positive ids)
+		# Right side (negative ids)
 		if n_right > 0:
 			right = ET.SubElement(lane_section, "right")
 			for i in range(n_right):
@@ -91,6 +99,12 @@ class OpenDriveBuilder:
 			n_right = lane_cfg.num_lanes_right if lane_cfg.num_lanes_right is not None else 0
 			if (n_left <= 0 and n_right <= 0) and lane_cfg.num_lanes > 0:
 				n_right = lane_cfg.num_lanes
+			# mirror if only one side present
+			if lane_cfg.mirror_missing_side:
+				if n_left > 0 and n_right <= 0:
+					n_right = n_left
+				elif n_right > 0 and n_left <= 0:
+					n_left = n_right
 			# Left side
 			if n_left > 0:
 				left = ET.SubElement(lane_section, "left")
@@ -130,13 +144,23 @@ class OpenDriveBuilder:
 					# outgoing road predecessor from junction
 					link_out = ET.SubElement(roads[i+2], "link")
 					ET.SubElement(link_out, "predecessor", elementType="junction", elementId="1", contactPoint="end")
+					# lane counts for links (respect mirroring)
+					j_left = lane_cfg.num_lanes_left if lane_cfg.num_lanes_left is not None else 0
+					j_right = lane_cfg.num_lanes_right if lane_cfg.num_lanes_right is not None else 0
+					if (j_left <= 0 and j_right <= 0) and lane_cfg.num_lanes > 0:
+						j_right = lane_cfg.num_lanes
+					if lane_cfg.mirror_missing_side:
+						if j_left > 0 and j_right <= 0:
+							j_right = j_left
+						elif j_right > 0 and j_left <= 0:
+							j_left = j_right
 					# junction connection with laneLinks (map same ids on both sides)
 					conn = ET.SubElement(junc, "connection", id=str(i+1), incomingRoad=road_ids[i], connectingRoad=road_ids[i+1], contactPoint="end")
 					# Left side (positive ids)
-					for li in range(1, (lane_cfg.num_lanes_left if lane_cfg.num_lanes_left else 0) + 1):
+					for li in range(1, j_left + 1):
 						ET.SubElement(conn, "laneLink", _from=f"{li}", to=f"{li}")
 					# Right side (negative ids)
-					for ri in range(1, (lane_cfg.num_lanes_right if lane_cfg.num_lanes_right else (lane_cfg.num_lanes if lane_cfg.num_lanes else 0)) + 1):
+					for ri in range(1, j_right + 1):
 						ET.SubElement(conn, "laneLink", _from=f"{-ri}", to=f"{-ri}")
 					consumed[i] = True
 					consumed[i+1] = True
