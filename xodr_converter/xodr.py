@@ -48,6 +48,7 @@ class OpenDriveBuilder:
 	def build_network(self, segments: List[Tuple[List[Tuple[float, float]], bool, float]], lane_cfg: LaneConfig, signals_s_global: List[float], zebras_xy_list: List[List[Tuple[float, float]]]) -> ET.Element:
 		"""Build an OpenDRIVE with multiple roads split at junction gaps.
 		segments: list of (trajectory_xy, is_connecting, start_s_global)
+		- A sequence [incoming, connecting=True, outgoing] will be wired through a junction with laneLinks
 		"""
 		root = ET.Element("OpenDRIVE")
 		header = ET.SubElement(root, "header")
@@ -75,20 +76,43 @@ class OpenDriveBuilder:
 			roads.append(road_elem)
 			road_ids.append(str(idx+1))
 			road_lengths.append(length)
-		# Link roads and create a simple junction if any connecting segment exists
-		if roads:
-			for i in range(len(roads) - 1):
-				link = ET.SubElement(roads[i], "link")
-				ET.SubElement(link, "successor", elementType="road", elementId=road_ids[i+1], contactPoint="start")
-				plink = ET.SubElement(roads[i+1], "link")
-				ET.SubElement(plink, "predecessor", elementType="road", elementId=road_ids[i], contactPoint="end")
-			# Junction element (single) connecting first connecting road if present
-			any_conn = any(seg[1] for seg in segments)
-			if any_conn:
-				junc = ET.SubElement(root, "junction", id="1", name="j1")
-				for i, (_, is_conn, _) in enumerate(segments):
-					if is_conn and i > 0:
-						ET.SubElement(junc, "connection", id=str(i), incomingRoad=road_ids[i-1], connectingRoad=road_ids[i], contactPoint="end")
+		# Linking logic with optional junctions
+		junc: ET.Element | None = None
+		consumed = [False] * len(roads)
+		for i in range(len(roads)):
+			# Try to detect [incoming, connecting, outgoing]
+			if i + 2 < len(roads):
+				incoming_is_ok = True
+				connecting_is_conn = segments[i+1][1]
+				if connecting_is_conn:
+					# create junction if needed
+					if junc is None:
+						junc = ET.SubElement(root, "junction", id="1", name="j1")
+					# incoming -> junction
+					link_in = ET.SubElement(roads[i], "link")
+					ET.SubElement(link_in, "successor", elementType="junction", elementId="1", contactPoint="start")
+					# connecting road predecessor/ successor
+					link_conn = ET.SubElement(roads[i+1], "link")
+					ET.SubElement(link_conn, "predecessor", elementType="road", elementId=road_ids[i], contactPoint="end")
+					ET.SubElement(link_conn, "successor", elementType="road", elementId=road_ids[i+2], contactPoint="start")
+					# outgoing road predecessor from junction
+					link_out = ET.SubElement(roads[i+2], "link")
+					ET.SubElement(link_out, "predecessor", elementType="junction", elementId="1", contactPoint="end")
+					# junction connection with laneLinks (map same ids)
+					conn = ET.SubElement(junc, "connection", id=str(i+1), incomingRoad=road_ids[i], connectingRoad=road_ids[i+1], contactPoint="end")
+					for li in range(1, lane_cfg.num_lanes + 1):
+						ET.SubElement(conn, "laneLink", _from=f"{-li}", to=f"{-li}")
+					consumed[i] = True
+					consumed[i+1] = True
+					consumed[i+2] = True
+					continue
+			# If not part of a junction triple, link sequentially when possible
+			if not consumed[i]:
+				if i + 1 < len(roads) and not segments[i+1][1]:
+					link = ET.SubElement(roads[i], "link")
+					ET.SubElement(link, "successor", elementType="road", elementId=road_ids[i+1], contactPoint="start")
+					plink = ET.SubElement(roads[i+1], "link")
+					ET.SubElement(plink, "predecessor", elementType="road", elementId=road_ids[i], contactPoint="end")
 		# Minimal signals: assign to the first road segment by local s offset
 		if signals_s_global and roads:
 			signals = ET.SubElement(roads[0], "signals")
