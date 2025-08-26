@@ -4,7 +4,7 @@ import os
 from typing import List, Tuple
 from xml.etree import ElementTree as ET
 from .loaders import load_gps_csv, load_bev_json
-from .stitch import compute_poses_enu, compute_path_length_s, detect_stops, detect_intersection_gaps, simplify_trajectory
+from .stitch import compute_poses_enu, compute_path_length_s, detect_stops, detect_intersection_gaps, simplify_trajectory, split_poses_by_gaps
 from .coord import CoordinateConverter
 from .types import BEVFrame
 from .xodr import OpenDriveBuilder, LaneConfig
@@ -43,8 +43,12 @@ def main():
 	stop_segments = detect_stops(gps, poses, s_vals)
 	gap_segments = detect_intersection_gaps(bev, poses, s_vals)
 
-	# Simplify trajectory for planView
-	traj_xy = simplify_trajectory(poses, tolerance_m=0.5)
+	# Split trajectory into segments by gaps and simplify each segment
+	seg_defs = split_poses_by_gaps(poses, s_vals, gap_segments)
+	segments_xy: List[Tuple[List[Tuple[float, float]], bool, float]] = []
+	for seg_poses, is_conn, start_s in seg_defs:
+		seg_xy = simplify_trajectory(seg_poses, tolerance_m=0.5)
+		segments_xy.append((seg_xy, is_conn, start_s))
 	builder = OpenDriveBuilder()
 
 	# For now use a single lane with default width; future: derive from BEV lane lines
@@ -63,7 +67,7 @@ def main():
 				poly_world.append((xw, yw))
 			zebra_polys_world.append(poly_world)
 
-	root = builder.build(traj_xy, lane_cfg, signals_s, zebra_polys_world)
+	root = builder.build_network(segments_xy, lane_cfg, signals_s, zebra_polys_world)
 	os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 	ET.ElementTree(root).write(args.out, encoding="utf-8", xml_declaration=True)
 
