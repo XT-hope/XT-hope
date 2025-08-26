@@ -145,7 +145,6 @@ class OpenDriveBuilder:
 				if connecting_is_conn:
 					# classify movement using end heading of incoming and start heading of outgoing
 					mov = self._classify_movement(seg_end_hdg[i], seg_start_hdg[i+2])
-					is_right_turn_slip = (mov == "right")
 					# If connecting is a turn, re-emit its geometry as line-spiral-arc-spiral-line
 					if mov in ("left", "right"):
 						# Replace existing planView children with turn geometry
@@ -154,55 +153,39 @@ class OpenDriveBuilder:
 							for child in list(plan):
 								plan.remove(child)
 							self._emit_turn_geometry(plan, segments[i+1][0], mov)
-					# create junction only if not right-turn slip
-					if not is_right_turn_slip:
-						if junc is None:
-							junc = ET.SubElement(root, "junction", id="1", name="j1")
-						# incoming -> junction
-						link_in = ET.SubElement(roads[i], "link")
-						ET.SubElement(link_in, "successor", elementType="junction", elementId="1", contactPoint="start")
-						# connecting road predecessor/ successor
-						link_conn = ET.SubElement(roads[i+1], "link")
-						ET.SubElement(link_conn, "predecessor", elementType="road", elementId=road_ids[i], contactPoint="end")
-						ET.SubElement(link_conn, "successor", elementType="road", elementId=road_ids[i+2], contactPoint="start")
-						# outgoing road predecessor from junction
-						link_out = ET.SubElement(roads[i+2], "link")
-						ET.SubElement(link_out, "predecessor", elementType="junction", elementId="1", contactPoint="end")
-						# lane counts for links (respect mirroring)
-						j_left = lane_cfg.num_lanes_left if lane_cfg.num_lanes_left is not None else 0
-						j_right = lane_cfg.num_lanes_right if lane_cfg.num_lanes_right is not None else 0
-						if (j_left <= 0 and j_right <= 0) and lane_cfg.num_lanes > 0:
-							j_right = lane_cfg.num_lanes
-						if lane_cfg.mirror_missing_side:
-							if j_left > 0 and j_right <= 0:
-								j_right = j_left
-							elif j_right > 0 and j_left <= 0:
-								j_left = j_right
-						# junction connection with laneLinks: map only the representative driving lane per movement on right side (negative ids)
-						conn = ET.SubElement(junc, "connection", id=str(i+1), incomingRoad=road_ids[i], connectingRoad=road_ids[i+1], contactPoint="end")
-						from_id = self._select_lane_id_for_movement(j_right, mov)
-						to_id = self._select_lane_id_for_movement(j_right, mov)
-						if from_id is not None and to_id is not None:
-							ET.SubElement(conn, "laneLink", _from=f"{from_id}", to=f"{to_id}")
-						consumed[i] = True
-						consumed[i+1] = True
-						consumed[i+2] = True
-						continue
-					else:
-						# Right-turn slip: do not create junction; link sequentially incoming -> slip -> outgoing
-						link1 = ET.SubElement(roads[i], "link")
-						ET.SubElement(link1, "successor", elementType="road", elementId=road_ids[i+1], contactPoint="start")
-						link2 = ET.SubElement(roads[i+1], "link")
-						ET.SubElement(link2, "predecessor", elementType="road", elementId=road_ids[i], contactPoint="end")
-						ET.SubElement(link2, "successor", elementType="road", elementId=road_ids[i+2], contactPoint="start")
-						link3 = ET.SubElement(roads[i+2], "link")
-						ET.SubElement(link3, "predecessor", elementType="road", elementId=road_ids[i+1], contactPoint="end")
-						# mark the slip road as non-junction
-						roads[i+1].attrib["junction"] = "-1"
-						consumed[i] = True
-						consumed[i+1] = True
-						consumed[i+2] = True
-						continue
+					# always create junction (do not auto-convert right turn into slip without lane-level hints)
+					if junc is None:
+						junc = ET.SubElement(root, "junction", id="1", name="j1")
+					# incoming -> junction
+					link_in = ET.SubElement(roads[i], "link")
+					ET.SubElement(link_in, "successor", elementType="junction", elementId="1", contactPoint="start")
+					# connecting road predecessor/ successor
+					link_conn = ET.SubElement(roads[i+1], "link")
+					ET.SubElement(link_conn, "predecessor", elementType="road", elementId=road_ids[i], contactPoint="end")
+					ET.SubElement(link_conn, "successor", elementType="road", elementId=road_ids[i+2], contactPoint="start")
+					# outgoing road predecessor from junction
+					link_out = ET.SubElement(roads[i+2], "link")
+					ET.SubElement(link_out, "predecessor", elementType="junction", elementId="1", contactPoint="end")
+					# lane counts for links (respect mirroring)
+					j_left = lane_cfg.num_lanes_left if lane_cfg.num_lanes_left is not None else 0
+					j_right = lane_cfg.num_lanes_right if lane_cfg.num_lanes_right is not None else 0
+					if (j_left <= 0 and j_right <= 0) and lane_cfg.num_lanes > 0:
+						j_right = lane_cfg.num_lanes
+					if lane_cfg.mirror_missing_side:
+						if j_left > 0 and j_right <= 0:
+							j_right = j_left
+						elif j_right > 0 and j_left <= 0:
+							j_left = j_right
+					# junction connection with laneLinks: choose lane per movement per your rules
+					conn = ET.SubElement(junc, "connection", id=str(i+1), incomingRoad=road_ids[i], connectingRoad=road_ids[i+1], contactPoint="end")
+					from_ids = self._lanes_for_movement(j_right, mov)
+					for from_id in from_ids:
+						to_id = from_id if from_id >= -j_right else -j_right
+						ET.SubElement(conn, "laneLink", _from=f"{from_id}", to=f"{to_id}")
+					consumed[i] = True
+					consumed[i+1] = True
+					consumed[i+2] = True
+					continue
 			# If not part of a junction triple, link sequentially when possible
 			if not consumed[i]:
 				if i + 1 < len(roads) and not segments[i+1][1]:
@@ -403,6 +386,34 @@ class OpenDriveBuilder:
 			return -3 if num_right >= 3 else (-2 if num_right >= 2 else -1)
 		return -1
 
+	def _lanes_for_movement(self, num_right: int, movement: str) -> List[int]:
+		"""Return a list of incoming right-side lane ids (negative) that should link to a connectingRoad for the given movement.
+		Rules:
+		- For 2 lanes per approach (dual 4-lane): leftmost (-2) connects both straight and left; rightmost (-1) is right (and may be straight but we avoid duplicating straight here).
+		- For >=3 lanes per approach: leftmost (-3) connects left only; straight uses middle (-2); right uses rightmost (-1).
+		- For 1 lane: map that lane to all movements as fallback.
+		"""
+		if num_right <= 0:
+			return []
+		if num_right == 1:
+			return [-1]
+		if movement == "right":
+			return [-1]
+		if movement == "left":
+			if num_right == 2:
+				return [-2]
+			return [-3] if num_right >= 3 else [-1]
+		if movement == "straight":
+			if num_right == 2:
+				# Avoid duplicating straight on rightmost; use leftmost (-2) per your rule
+				return [-2]
+			# For >=3 lanes, use middle lane for straight by default
+			return [-2] if num_right >= 2 else [-1]
+		# uturn or others: map to leftmost available
+		if num_right >= 3:
+			return [-3]
+		return [-2] if num_right >= 2 else [-1]
+
 	def _emit_turn_geometry(self, plan_elem: ET.Element, traj_xy: List[Tuple[float,float]], movement: str) -> None:
 		# Build a 5-piece: line + spiral + arc + spiral + line that connects start/end pose of traj
 		if len(traj_xy) < 2:
@@ -413,23 +424,21 @@ class OpenDriveBuilder:
 		h1 = self._heading(traj_xy[-2][0], traj_xy[-2][1], traj_xy[-1][0], traj_xy[-1][1])
 		phi = self._normalize_angle_rad(h1 - h0)
 		turn_right = (movement == "right")
-		# Choose design parameters
+		# Choose design parameters with short spirals; allow S-A-S behavior when Ls approaches 0
 		R = 15.0 if turn_right else 35.0
-		# spiral length choose limited and consistent with phi
-		Ls = max(5.0, min(0.3 * R, 20.0))
-		# compute arc central angle
+		# Very short spiral to just transition curvature
+		Ls = max(0.5, min(2.0, 0.1 * R))
+		# arc central angle roughly deduct spiral contributions (two symmetric spirals each ~0.5*Ls/R)
 		alpha = phi - (Ls / R)
-		# If alpha too small, reduce Ls
 		if abs(alpha) < 1e-3:
-			Ls = max(3.0, 0.2 * R)
-			alpha = phi - (Ls / R)
+			# fallback towards S-A-S: shrink spiral
+			Ls = 0.0
+			alpha = phi
 		# lengths
 		Lc = max(0.0, R * abs(alpha))
 		Llead = 0.0
 		Ltrail = 0.0
-		# Emit geometries with numeric integration to get end pose of spirals
-		s_acc = 0.0
-		# helper to append and update pose
+		# Emit geometries
 		def add_line(x: float, y: float, hdg: float, L: float) -> Tuple[float,float,float,float]:
 			geom = ET.SubElement(plan_elem, "geometry", s=f"{add_line.s:.3f}", x=f"{x:.3f}", y=f"{y:.3f}", hdg=f"{hdg:.6f}", length=f"{L:.3f}")
 			ET.SubElement(geom, "line")
@@ -441,9 +450,8 @@ class OpenDriveBuilder:
 		def add_spiral(x: float, y: float, hdg: float, L: float, k0: float, k1: float) -> Tuple[float,float,float,float]:
 			geom = ET.SubElement(plan_elem, "geometry", s=f"{add_line.s:.3f}", x=f"{x:.3f}", y=f"{y:.3f}", hdg=f"{hdg:.6f}", length=f"{L:.3f}")
 			ET.SubElement(geom, "spiral", curvStart=f"{k0:.6f}", curvEnd=f"{k1:.6f}")
-			# numeric integrate
-			steps = max(20, int(L / 0.5))
-			ds = L / steps
+			steps = max(10, int(L / 0.5)) if L > 0 else 0
+			ds = (L / steps) if steps > 0 else 0.0
 			kx = k0
 			k_inc = (k1 - k0) / L if L > 0 else 0.0
 			xc, yc, th = x, y, hdg
@@ -457,7 +465,6 @@ class OpenDriveBuilder:
 		def add_arc(x: float, y: float, hdg: float, L: float, k: float) -> Tuple[float,float,float,float]:
 			geom = ET.SubElement(plan_elem, "geometry", s=f"{add_line.s:.3f}", x=f"{x:.3f}", y=f"{y:.3f}", hdg=f"{hdg:.6f}", length=f"{L:.3f}")
 			ET.SubElement(geom, "arc", curvature=f"{k:.6f}")
-			# integrate constant curvature
 			if abs(k) < 1e-9:
 				x2, y2, th2, _ = add_line(x, y, hdg, L)
 				return x2, y2, th2, L
@@ -467,19 +474,16 @@ class OpenDriveBuilder:
 			y2 = y - Rloc * (math.cos(th2) - math.cos(hdg))
 			add_line.s += L
 			return x2, y2, th2, L
-		# start with optional short lead/ trail lines (zero by default)
+		# Compose: optional short lead, spiral, arc, spiral, optional trail; if Ls == 0 use S-A-S
 		xc, yc, th = x0, y0, h0
 		if Llead > 1e-3:
 			xc, yc, th, _ = add_line(xc, yc, th, Llead)
-		# spiral in
 		k_end = (1.0 / R) * ( -1.0 if turn_right else 1.0 )
-		xc, yc, th, _ = add_spiral(xc, yc, th, Ls, 0.0, k_end)
-		# arc
+		if Ls > 1e-6:
+			xc, yc, th, _ = add_spiral(xc, yc, th, Ls, 0.0, k_end)
 		xc, yc, th, _ = add_arc(xc, yc, th, Lc, k_end)
-		# spiral out back to zero curvature
-		xc, yc, th, _ = add_spiral(xc, yc, th, Ls, k_end, 0.0)
-		# trailing line to reach the endpoint direction roughly
+		if Ls > 1e-6:
+			xc, yc, th, _ = add_spiral(xc, yc, th, Ls, k_end, 0.0)
 		if Ltrail > 1e-3:
 			xc, yc, th, _ = add_line(xc, yc, th, Ltrail)
-		# Note: We do not force exact end (x1,y1, h1), but geometry is G2 continuous and close in pose; for small junctions this is acceptable.
 		return
