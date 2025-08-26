@@ -1,0 +1,10 @@
+[
+	{"ts": 0, "lane_lines": [{"id": "L1", "points_xy": [[0, -1.75], [50, -1.75], [100, -1.75]]}, {"id": "R1", "points_xy": [[0, 1.75], [50, 1.75], [100, 1.75]]}], "zebras": []},
+	{"ts": 1, "lane_lines": [{"id": "L1", "points_xy": [[0, -1.75], [50, -1.75]]}, {"id": "R1", "points_xy": [[0, 1.75], [50, 1.75]]}], "zebras": [{"polygon_xy": [[30, -3], [30, 3], [35, 3], [35, -3]]}]},
+	{"ts": 2, "lane_lines": [], "zebras": []},
+	{"ts": 3, "lane_lines": [], "zebras": []},
+	{"ts": 4, "lane_lines": [], "zebras": []},
+	{"ts": 5, "lane_lines": [{"id": "L1", "points_xy": [[0, -1.75], [50, -1.75]]}, {"id": "R1", "points_xy": [[0, 1.75], [50, 1.75]]}], "zebras": []},
+	{"ts": 6, "lane_lines": [{"id": "L1", "points_xy": [[0, -1.75], [50, -1.75]]}, {"id": "R1", "points_xy": [[0, 1.75], [50, 1.75]]}], "zebras": []},
+	{"ts": 7, "lane_lines": [{"id": "L1", "points_xy": [[0, -1.75], [50, -1.75]]}, {"id": "R1", "points_xy": [[0, 1.75], [50, 1.75]]}], "zebras": []}
+]
