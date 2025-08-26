@@ -85,10 +85,16 @@ class OpenDriveBuilder:
 		roads: List[ET.Element] = []
 		road_ids: List[str] = []
 		road_lengths: List[float] = []
+		# Pre-compute headings for each segment at start and end
+		seg_start_hdg: List[float] = []
+		seg_end_hdg: List[float] = []
 		for idx, (traj, is_conn, start_s) in enumerate(segments):
 			length = self._compute_length(traj)
+			# Create road element, but delay linking decisions
+			# For connecting segments we may decide to model as slip (non-junction) based on movement classification later
 			road_elem = ET.SubElement(root, "road", id=str(idx+1), name=("conn_" if is_conn else "road_") + str(idx+1), length=f"{length:.3f}", junction=("1" if is_conn else "-1"))
 			plan = ET.SubElement(road_elem, "planView")
+			# Placeholder: emit simple geometry; we may adjust for turn segments below when linking determines movement
 			self._emit_plan_view_param_poly3(plan, traj)
 			lanes = ET.SubElement(road_elem, "lanes")
 			lane_section = ET.SubElement(lanes, "laneSection", s="0.000")
@@ -99,7 +105,6 @@ class OpenDriveBuilder:
 			n_right = lane_cfg.num_lanes_right if lane_cfg.num_lanes_right is not None else 0
 			if (n_left <= 0 and n_right <= 0) and lane_cfg.num_lanes > 0:
 				n_right = lane_cfg.num_lanes
-			# mirror if only one side present
 			if lane_cfg.mirror_missing_side:
 				if n_left > 0 and n_right <= 0:
 					n_right = n_left
@@ -122,6 +127,13 @@ class OpenDriveBuilder:
 			roads.append(road_elem)
 			road_ids.append(str(idx+1))
 			road_lengths.append(length)
+			# Headings at start/end
+			if len(traj) >= 2:
+				seg_start_hdg.append(self._heading(traj[0][0], traj[0][1], traj[1][0], traj[1][1]))
+				seg_end_hdg.append(self._heading(traj[-2][0], traj[-2][1], traj[-1][0], traj[-1][1]))
+			else:
+				seg_start_hdg.append(0.0)
+				seg_end_hdg.append(0.0)
 		# Linking logic with optional junctions
 		junc: ET.Element | None = None
 		consumed = [False] * len(roads)
@@ -131,41 +143,66 @@ class OpenDriveBuilder:
 				incoming_is_ok = True
 				connecting_is_conn = segments[i+1][1]
 				if connecting_is_conn:
-					# create junction if needed
-					if junc is None:
-						junc = ET.SubElement(root, "junction", id="1", name="j1")
-					# incoming -> junction
-					link_in = ET.SubElement(roads[i], "link")
-					ET.SubElement(link_in, "successor", elementType="junction", elementId="1", contactPoint="start")
-					# connecting road predecessor/ successor
-					link_conn = ET.SubElement(roads[i+1], "link")
-					ET.SubElement(link_conn, "predecessor", elementType="road", elementId=road_ids[i], contactPoint="end")
-					ET.SubElement(link_conn, "successor", elementType="road", elementId=road_ids[i+2], contactPoint="start")
-					# outgoing road predecessor from junction
-					link_out = ET.SubElement(roads[i+2], "link")
-					ET.SubElement(link_out, "predecessor", elementType="junction", elementId="1", contactPoint="end")
-					# lane counts for links (respect mirroring)
-					j_left = lane_cfg.num_lanes_left if lane_cfg.num_lanes_left is not None else 0
-					j_right = lane_cfg.num_lanes_right if lane_cfg.num_lanes_right is not None else 0
-					if (j_left <= 0 and j_right <= 0) and lane_cfg.num_lanes > 0:
-						j_right = lane_cfg.num_lanes
-					if lane_cfg.mirror_missing_side:
-						if j_left > 0 and j_right <= 0:
-							j_right = j_left
-						elif j_right > 0 and j_left <= 0:
-							j_left = j_right
-					# junction connection with laneLinks (map same ids on both sides)
-					conn = ET.SubElement(junc, "connection", id=str(i+1), incomingRoad=road_ids[i], connectingRoad=road_ids[i+1], contactPoint="end")
-					# Left side (positive ids)
-					for li in range(1, j_left + 1):
-						ET.SubElement(conn, "laneLink", _from=f"{li}", to=f"{li}")
-					# Right side (negative ids)
-					for ri in range(1, j_right + 1):
-						ET.SubElement(conn, "laneLink", _from=f"{-ri}", to=f"{-ri}")
-					consumed[i] = True
-					consumed[i+1] = True
-					consumed[i+2] = True
-					continue
+					# classify movement using end heading of incoming and start heading of outgoing
+					mov = self._classify_movement(seg_end_hdg[i], seg_start_hdg[i+2])
+					is_right_turn_slip = (mov == "right")
+					# If connecting is a turn, re-emit its geometry as line-spiral-arc-spiral-line
+					if mov in ("left", "right"):
+						# Replace existing planView children with turn geometry
+						plan = roads[i+1].find("planView")
+						if plan is not None:
+							for child in list(plan):
+								plan.remove(child)
+							self._emit_turn_geometry(plan, segments[i+1][0], mov)
+					# create junction only if not right-turn slip
+					if not is_right_turn_slip:
+						if junc is None:
+							junc = ET.SubElement(root, "junction", id="1", name="j1")
+						# incoming -> junction
+						link_in = ET.SubElement(roads[i], "link")
+						ET.SubElement(link_in, "successor", elementType="junction", elementId="1", contactPoint="start")
+						# connecting road predecessor/ successor
+						link_conn = ET.SubElement(roads[i+1], "link")
+						ET.SubElement(link_conn, "predecessor", elementType="road", elementId=road_ids[i], contactPoint="end")
+						ET.SubElement(link_conn, "successor", elementType="road", elementId=road_ids[i+2], contactPoint="start")
+						# outgoing road predecessor from junction
+						link_out = ET.SubElement(roads[i+2], "link")
+						ET.SubElement(link_out, "predecessor", elementType="junction", elementId="1", contactPoint="end")
+						# lane counts for links (respect mirroring)
+						j_left = lane_cfg.num_lanes_left if lane_cfg.num_lanes_left is not None else 0
+						j_right = lane_cfg.num_lanes_right if lane_cfg.num_lanes_right is not None else 0
+						if (j_left <= 0 and j_right <= 0) and lane_cfg.num_lanes > 0:
+							j_right = lane_cfg.num_lanes
+						if lane_cfg.mirror_missing_side:
+							if j_left > 0 and j_right <= 0:
+								j_right = j_left
+							elif j_right > 0 and j_left <= 0:
+								j_left = j_right
+						# junction connection with laneLinks: map only the representative driving lane per movement on right side (negative ids)
+						conn = ET.SubElement(junc, "connection", id=str(i+1), incomingRoad=road_ids[i], connectingRoad=road_ids[i+1], contactPoint="end")
+						from_id = self._select_lane_id_for_movement(j_right, mov)
+						to_id = self._select_lane_id_for_movement(j_right, mov)
+						if from_id is not None and to_id is not None:
+							ET.SubElement(conn, "laneLink", _from=f"{from_id}", to=f"{to_id}")
+						consumed[i] = True
+						consumed[i+1] = True
+						consumed[i+2] = True
+						continue
+					else:
+						# Right-turn slip: do not create junction; link sequentially incoming -> slip -> outgoing
+						link1 = ET.SubElement(roads[i], "link")
+						ET.SubElement(link1, "successor", elementType="road", elementId=road_ids[i+1], contactPoint="start")
+						link2 = ET.SubElement(roads[i+1], "link")
+						ET.SubElement(link2, "predecessor", elementType="road", elementId=road_ids[i], contactPoint="end")
+						ET.SubElement(link2, "successor", elementType="road", elementId=road_ids[i+2], contactPoint="start")
+						link3 = ET.SubElement(roads[i+2], "link")
+						ET.SubElement(link3, "predecessor", elementType="road", elementId=road_ids[i+1], contactPoint="end")
+						# mark the slip road as non-junction
+						roads[i+1].attrib["junction"] = "-1"
+						consumed[i] = True
+						consumed[i+1] = True
+						consumed[i+2] = True
+						continue
 			# If not part of a junction triple, link sequentially when possible
 			if not consumed[i]:
 				if i + 1 < len(roads) and not segments[i+1][1]:
@@ -328,3 +365,121 @@ class OpenDriveBuilder:
 					A[r][c] -= factor * A[i][c]
 				xb[r] -= factor * xb[i]
 		return xb
+
+	@staticmethod
+	def _normalize_angle_rad(angle: float) -> float:
+		while angle > math.pi:
+			angle -= 2 * math.pi
+		while angle < -math.pi:
+			angle += 2 * math.pi
+		return angle
+
+	def _classify_movement(self, theta_in: float, theta_out: float) -> str:
+		delta = self._normalize_angle_rad(theta_out - theta_in)
+		ad = abs(delta)
+		# thresholds: straight <= 20deg, right <= -45deg, left >= 45deg, uturn >= 150deg
+		deg = 180.0 / math.pi
+		if ad >= 150.0/deg:
+			return "uturn"
+		if ad <= 20.0/deg:
+			return "straight"
+		if delta <= -45.0/deg:
+			return "right"
+		if delta >= 45.0/deg:
+			return "left"
+		return "straight"
+
+	def _select_lane_id_for_movement(self, num_right: int, movement: str) -> int | None:
+		# Right-side negative ids: -1 rightmost, -2 middle, -3 leftmost of approach
+		if num_right <= 0:
+			return None
+		if movement == "right":
+			return -1
+		if movement == "straight":
+			return -2 if num_right >= 2 else -1
+		if movement == "left":
+			return -3 if num_right >= 3 else (-2 if num_right >= 2 else -1)
+		if movement == "uturn":
+			return -3 if num_right >= 3 else (-2 if num_right >= 2 else -1)
+		return -1
+
+	def _emit_turn_geometry(self, plan_elem: ET.Element, traj_xy: List[Tuple[float,float]], movement: str) -> None:
+		# Build a 5-piece: line + spiral + arc + spiral + line that connects start/end pose of traj
+		if len(traj_xy) < 2:
+			return
+		x0, y0 = traj_xy[0]
+		x1, y1 = traj_xy[-1]
+		h0 = self._heading(traj_xy[0][0], traj_xy[0][1], traj_xy[1][0], traj_xy[1][1])
+		h1 = self._heading(traj_xy[-2][0], traj_xy[-2][1], traj_xy[-1][0], traj_xy[-1][1])
+		phi = self._normalize_angle_rad(h1 - h0)
+		turn_right = (movement == "right")
+		# Choose design parameters
+		R = 15.0 if turn_right else 35.0
+		# spiral length choose limited and consistent with phi
+		Ls = max(5.0, min(0.3 * R, 20.0))
+		# compute arc central angle
+		alpha = phi - (Ls / R)
+		# If alpha too small, reduce Ls
+		if abs(alpha) < 1e-3:
+			Ls = max(3.0, 0.2 * R)
+			alpha = phi - (Ls / R)
+		# lengths
+		Lc = max(0.0, R * abs(alpha))
+		Llead = 0.0
+		Ltrail = 0.0
+		# Emit geometries with numeric integration to get end pose of spirals
+		s_acc = 0.0
+		# helper to append and update pose
+		def add_line(x: float, y: float, hdg: float, L: float) -> Tuple[float,float,float,float]:
+			geom = ET.SubElement(plan_elem, "geometry", s=f"{add_line.s:.3f}", x=f"{x:.3f}", y=f"{y:.3f}", hdg=f"{hdg:.6f}", length=f"{L:.3f}")
+			ET.SubElement(geom, "line")
+			x2 = x + L * math.cos(hdg)
+			y2 = y + L * math.sin(hdg)
+			add_line.s += L
+			return x2, y2, hdg, L
+		add_line.s = 0.0
+		def add_spiral(x: float, y: float, hdg: float, L: float, k0: float, k1: float) -> Tuple[float,float,float,float]:
+			geom = ET.SubElement(plan_elem, "geometry", s=f"{add_line.s:.3f}", x=f"{x:.3f}", y=f"{y:.3f}", hdg=f"{hdg:.6f}", length=f"{L:.3f}")
+			ET.SubElement(geom, "spiral", curvStart=f"{k0:.6f}", curvEnd=f"{k1:.6f}")
+			# numeric integrate
+			steps = max(20, int(L / 0.5))
+			ds = L / steps
+			kx = k0
+			k_inc = (k1 - k0) / L if L > 0 else 0.0
+			xc, yc, th = x, y, hdg
+			for _ in range(steps):
+				th += (kx + 0.5 * k_inc * ds) * ds
+				xc += ds * math.cos(th)
+				yc += ds * math.sin(th)
+				kx += k_inc * ds
+			add_line.s += L
+			return xc, yc, th, L
+		def add_arc(x: float, y: float, hdg: float, L: float, k: float) -> Tuple[float,float,float,float]:
+			geom = ET.SubElement(plan_elem, "geometry", s=f"{add_line.s:.3f}", x=f"{x:.3f}", y=f"{y:.3f}", hdg=f"{hdg:.6f}", length=f"{L:.3f}")
+			ET.SubElement(geom, "arc", curvature=f"{k:.6f}")
+			# integrate constant curvature
+			if abs(k) < 1e-9:
+				x2, y2, th2, _ = add_line(x, y, hdg, L)
+				return x2, y2, th2, L
+			th2 = hdg + k * L
+			Rloc = 1.0 / k
+			x2 = x + Rloc * (math.sin(th2) - math.sin(hdg))
+			y2 = y - Rloc * (math.cos(th2) - math.cos(hdg))
+			add_line.s += L
+			return x2, y2, th2, L
+		# start with optional short lead/ trail lines (zero by default)
+		xc, yc, th = x0, y0, h0
+		if Llead > 1e-3:
+			xc, yc, th, _ = add_line(xc, yc, th, Llead)
+		# spiral in
+		k_end = (1.0 / R) * ( -1.0 if turn_right else 1.0 )
+		xc, yc, th, _ = add_spiral(xc, yc, th, Ls, 0.0, k_end)
+		# arc
+		xc, yc, th, _ = add_arc(xc, yc, th, Lc, k_end)
+		# spiral out back to zero curvature
+		xc, yc, th, _ = add_spiral(xc, yc, th, Ls, k_end, 0.0)
+		# trailing line to reach the endpoint direction roughly
+		if Ltrail > 1e-3:
+			xc, yc, th, _ = add_line(xc, yc, th, Ltrail)
+		# Note: We do not force exact end (x1,y1, h1), but geometry is G2 continuous and close in pose; for small junctions this is acceptable.
+		return

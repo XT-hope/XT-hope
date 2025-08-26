@@ -51,8 +51,8 @@ def main():
 		segments_xy.append((seg_xy, is_conn, start_s))
 	builder = OpenDriveBuilder()
 
-	# For now use a single lane with default width; future: derive from BEV lane lines
-	lane_cfg = LaneConfig(num_lanes=1, lane_width_m=3.5, mark_type="broken")
+	# Default to 3 lanes per side for dual-direction arterial unless overridden later
+	lane_cfg = LaneConfig(num_lanes_left=3, num_lanes_right=3, lane_width_m=3.5, mark_type="broken")
 	signals_s = [seg.s_at_start for seg in stop_segments]
 	# Crosswalks: transform ego polygons at matched frames into ENU approx using pose heading
 	poses_ts = [p.ts for p in poses]
