@@ -28,8 +28,7 @@
       "id": "S3",
       "type": "set",
       "signal": "SignalC",
-      "value": 3,
-      "within_ms": 500
+      "value": 3
     },
     {
       "id": "C1",

@@ -13,6 +13,7 @@ Grammar (informal):
   [SET]
   S1: set SignalA = 1 within 200ms [then CHECK C1[,C2 ...]]
   S2: set SignalB = 0 within 100ms
+  S3: set SignalC = 3                      # 'within' optional
   ...
 
   [CHECK]
@@ -169,8 +170,8 @@ def _parse_set_step(line: str) -> Tuple[Dict[str, Any], Optional[List[str]]]:
 
     m = re.fullmatch(
         r"\s*(?P<id>\w+)\s*:\s*set\s+"
-        r"(?P<signal>[A-Za-z_]\w*)\s*=\s*(?P<value>[^\s]+)\s+"
-        r"within\s+(?P<within>[^\s]+)"
+        r"(?P<signal>[A-Za-z_]\w*)\s*=\s*(?P<value>[^\s]+)"
+        r"(?:\s+within\s+(?P<within>[^\s]+))?"
         r"(?:\s+then\s+CHECK\s+(?P<checks>.+))?\s*",
         line,
         flags=re.IGNORECASE,
@@ -189,8 +190,9 @@ def _parse_set_step(line: str) -> Tuple[Dict[str, Any], Optional[List[str]]]:
         "type": _SECTION_SET,
         "signal": signal_name,
         "value": _parse_scalar_value(value_raw),
-        "within_ms": parse_duration_to_ms(within_raw),
     }
+    if within_raw:
+        step["within_ms"] = parse_duration_to_ms(within_raw)
 
     inline_checks: Optional[List[str]] = None
     if checks_raw:

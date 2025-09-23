@@ -4,7 +4,7 @@ META: priority=P1 owner=QA requirement=REQ-123
 [SET]
 S1: set SignalA = 1 within 200ms
 S2: set SignalB = 0 within 100ms then CHECK C1
-S3: set SignalC = 3 within 500ms
+S3: set SignalC = 3
 
 [CHECK]
 C1: check SignalX == 1 timeoutOfCheck 1500ms after EventReady@500ms count >= 1
