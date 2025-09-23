@@ -20,6 +20,9 @@ Grammar (informal):
   C2: check SignalY in {2,3} window 200..1000ms [count == 2]
   C3: check SignalZ in 2..5 window 0..2s [after EventReady@500ms]
 
+Shorthand:
+  - window <dur>   (equivalent to window 0..<dur>)
+
 Also supports the more verbose legacy forms:
   - after_detect wait_event EventName timeout 500ms
   - after_detect wait 100ms
@@ -307,6 +310,13 @@ def _parse_check_step(line: str, defaults: ParserDefaults) -> Dict[str, Any]:
         start_raw = m_win.group(1)
         end_raw = m_win.group(2)
         window_ms = (parse_duration_to_ms(start_raw), parse_duration_to_ms(end_raw))
+    else:
+        # window <dur>  -> [0, dur]
+        m_win_single, tail2 = _consume(r"\bwindow\s+([^\s]+)", tail)
+        if m_win_single:
+            end_raw = m_win_single.group(1)
+            window_ms = (0, parse_duration_to_ms(end_raw))
+            tail = tail2
 
     # count operator value
     m_cnt, tail = _consume(r"\bcount\s*(==|>=|<=)\s*(\d+)", tail)
