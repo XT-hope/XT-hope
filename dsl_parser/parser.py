@@ -16,12 +16,15 @@ Grammar (informal):
   ...
 
   [CHECK]
-  C1: check SignalX == 1 window 0..1500ms [count >= 1] [after 100ms]
-  C2: check SignalY in {2,3} window 200..1000ms [count == 2]
-  C3: check SignalZ in 2..5 window 0..2s [after EventReady@500ms]
+  C1: check SignalX == 1 timeoutOfCheck 1500ms [count >= 1] [after 100ms]
+  C2: check SignalY in {2,3} timeoutOfCheck 1000ms [count == 2]
+  C3: check SignalZ in 2..5 timeoutOfCheck 2s [after EventReady@500ms]
 
-Shorthand:
-  - window <dur>   (equivalent to window 0..<dur>)
+Shorthand / legacy support:
+  - timeoutOfCheck <dur>   (preferred; equivalent to legacy 'window 0..<dur>')
+  - window 0..<dur>        (legacy, maps to timeoutOfCheck_ms)
+  - window <dur>           (legacy, maps to timeoutOfCheck_ms)
+  - window <a>..<b>        (legacy range; preserved as window_ms [a,b])
 
 Also supports the more verbose legacy forms:
   - after_detect wait_event EventName timeout 500ms
@@ -276,12 +279,13 @@ def _parse_check_step(line: str, defaults: ParserDefaults) -> Dict[str, Any]:
         match = re.search(rf"\b{kw}\b", s, flags=re.IGNORECASE)
         return match.start() if match else -1
 
+    idx_to = _find_kw(rest, "timeoutOfCheck")
     idx_window = _find_kw(rest, "window")
     idx_after_detect = _find_kw(rest, "after_detect")
     idx_after = _find_kw(rest, "after")
     idx_count = _find_kw(rest, "count")
 
-    indices = [i for i in [idx_window, idx_after_detect, idx_after, idx_count] if i >= 0]
+    indices = [i for i in [idx_to, idx_window, idx_after_detect, idx_after, idx_count] if i >= 0]
     cut = min(indices) if indices else len(rest)
     assert_part = rest[:cut].strip()
     tail = rest[cut:].strip()
@@ -291,6 +295,7 @@ def _parse_check_step(line: str, defaults: ParserDefaults) -> Dict[str, Any]:
     assert_dict = _parse_check_assert(assert_part)
 
     window_ms: Optional[Tuple[int, int]] = None
+    timeout_of_check_ms: Optional[int] = None
     after_dict: Optional[Dict[str, Any]] = None
     count_dict: Optional[Dict[str, Any]] = None
 
@@ -304,18 +309,23 @@ def _parse_check_step(line: str, defaults: ParserDefaults) -> Dict[str, Any]:
         new_text = (text[:start] + text[end:]).strip()
         return m, new_text
 
-    # window a..b (durations)
+    # timeoutOfCheck <dur> (preferred)
+    m_to, tail = _consume(r"\btimeoutOfCheck\s+([^\s]+)", tail)
+    if m_to:
+        timeout_of_check_ms = parse_duration_to_ms(m_to.group(1))
+
+    # window a..b (durations) [legacy]
     m_win, tail = _consume(r"\bwindow\s+([^\.\s]+)\s*\.\.\s*([^\s]+)", tail)
     if m_win:
         start_raw = m_win.group(1)
         end_raw = m_win.group(2)
         window_ms = (parse_duration_to_ms(start_raw), parse_duration_to_ms(end_raw))
     else:
-        # window <dur>  -> [0, dur]
+        # window <dur>  -> timeoutOfCheck <dur>
         m_win_single, tail2 = _consume(r"\bwindow\s+([^\s]+)", tail)
         if m_win_single:
             end_raw = m_win_single.group(1)
-            window_ms = (0, parse_duration_to_ms(end_raw))
+            timeout_of_check_ms = parse_duration_to_ms(end_raw)
             tail = tail2
 
     # count operator value
@@ -384,6 +394,8 @@ def _parse_check_step(line: str, defaults: ParserDefaults) -> Dict[str, Any]:
     }
     if window_ms is not None:
         step["window_ms"] = list(window_ms)
+    if timeout_of_check_ms is not None:
+        step["timeoutOfCheck_ms"] = timeout_of_check_ms
     if after_dict is not None:
         step["after_detect"] = after_dict
     if count_dict is not None:

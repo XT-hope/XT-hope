@@ -39,10 +39,7 @@
         "op": "eq",
         "value": 1
       },
-      "window_ms": [
-        0,
-        1500
-      ],
+      "timeoutOfCheck_ms": 1500,
       "after_detect": {
         "type": "event",
         "name": "EventReady",
@@ -63,10 +60,7 @@
           3
         ]
       },
-      "window_ms": [
-        200,
-        1000
-      ],
+      "timeoutOfCheck_ms": 1000,
       "after_detect": {
         "type": "sleep",
         "ms": 100
