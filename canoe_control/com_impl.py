@@ -29,7 +29,8 @@ class CANoeCOMController(CANoeController):
         try:
             self._measurement = self._app.Measurement
             self._env = self._app.Environment
-            self._sysvar = self._app.SystemVariables
+            # System variable root (use 'System' and navigate Namespaces/Variables)
+            self._system = self._app.System
         except Exception as exc:  # pragma: no cover
             raise CANoeError(f"Failed to acquire CANoe COM interfaces: {exc}")
 
@@ -69,13 +70,15 @@ class CANoeCOMController(CANoeController):
     # System variables
     def read_system_variable(self, path: str) -> Any:
         try:
-            return self._sysvar(path).Value
+            var = self._resolve_system_variable(path)
+            return var.Value
         except Exception as exc:
             raise CANoeError(f"Failed to read system variable '{path}': {exc}")
 
     def write_system_variable(self, path: str, value: Any) -> None:
         try:
-            self._sysvar(path).Value = value
+            var = self._resolve_system_variable(path)
+            var.Value = value
         except Exception as exc:
             raise CANoeError(f"Failed to write system variable '{path}': {exc}")
 
@@ -94,4 +97,37 @@ class CANoeCOMController(CANoeController):
                 raise CANoeError(f"Error while waiting to {what}: {exc}")
             time.sleep(0.02)
         raise CANoeError(f"Timeout while waiting to {what} (timeout={timeout_s}s)")
+
+    # System variable resolution
+    def _resolve_system_variable(self, path: str):
+        """Resolve a system variable by hierarchical path.
+
+        Path formats supported:
+          - "Ns1.Ns2.Var"
+          - "Ns1::Ns2::Var"
+          - "Var" (root namespace)
+        """
+        norm = path.strip()
+        if not norm:
+            raise CANoeError("Empty system variable path")
+        norm = norm.replace("::", ".")
+        parts = [p for p in norm.split(".") if p]
+        if not parts:
+            raise CANoeError(f"Invalid system variable path: '{path}'")
+        var_name = parts[-1]
+        namespaces = parts[:-1]
+
+        node = self._system
+        try:
+            if namespaces:
+                # Walk nested namespaces
+                node = node.Namespaces(namespaces[0])
+                for ns in namespaces[1:]:
+                    node = node.Namespaces(ns)
+                return node.Variables(var_name)
+            else:
+                # Root-level variable
+                return node.Variables(var_name)
+        except Exception as exc:  # pragma: no cover
+            raise CANoeError(f"Failed to resolve system variable '{path}': {exc}")
 
