@@ -36,7 +36,7 @@ Minimal controller to operate measurement and read/write variables, assuming CAN
 ```python
 from canoe_control import create_controller
 
-ctl = create_controller()  # or create_controller("dummy") for CI
+ctl = create_controller()
 ctl.start_measurement()
 ctl.write_environment_variable("MyEnv", 1)
 val = ctl.read_system_variable("MyNs.SubNs.MyVar")
