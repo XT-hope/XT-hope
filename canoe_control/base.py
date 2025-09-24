@@ -38,6 +38,27 @@ class CANoeController(ABC):
         """Write a system variable by hierarchical path (e.g. 'Ns1.Ns2.Var')."""
 
     @abstractmethod
+    def add_system_variable(
+        self,
+        path: str,
+        datatype: Any,
+        initial_value: Any,
+        min_value: Any,
+        max_value: Any,
+        is_add_new_namespace: bool = True,
+    ) -> None:
+        """Add a system variable.
+
+        Args:
+            path: Namespace and variable path, e.g. 'Ns1::Ns2::Var' or 'Ns1.Var'.
+            datatype: Underlying CANoe variable type identifier (implementation-specific).
+            initial_value: Initial value.
+            min_value: Minimum value (where applicable).
+            max_value: Maximum value (where applicable).
+            is_add_new_namespace: If True, create missing namespaces; otherwise require them to exist.
+        """
+
+    @abstractmethod
     def read_environment_variable(self, name: str) -> Any:
         """Read an environment variable by name."""
 

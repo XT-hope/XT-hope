@@ -102,6 +102,66 @@ class CANoeCOMController(CANoeController):
         except Exception as exc:
             raise CANoeError(f"Failed to write system variable '{path}': {exc}")
 
+    def add_system_variable(
+        self,
+        path: str,
+        datatype: Any,
+        initial_value: Any,
+        min_value: Any,
+        max_value: Any,
+        is_add_new_namespace: bool = True,
+    ) -> None:
+        """Create a system variable, optionally creating namespaces.
+
+        The CANoe COM model is 1-based for collections. This method supports
+        multi-level namespace creation or validation.
+        """
+        norm = path.strip()
+        if not norm:
+            raise CANoeError("Empty system variable path")
+        norm = norm.replace("::", ".")
+        parts = [p for p in norm.split(".") if p]
+        if not parts:
+            raise CANoeError(f"Invalid system variable path: '{path}'")
+        var_name = parts[-1]
+        namespaces = parts[:-1]
+
+        try:
+            node = self._system
+            # Traverse or create namespaces
+            for depth, ns_name in enumerate(namespaces):
+                existing = None
+                # search existing namespace at current level
+                for i in range(1, node.Namespaces.Count + 1):
+                    item = node.Namespaces.Item(i)
+                    if item.Name == ns_name:
+                        existing = item
+                        break
+                if existing is None:
+                    if is_add_new_namespace:
+                        node = node.Namespaces.Add(ns_name)
+                    else:
+                        raise CANoeError(f"Namespace '{ns_name}' does not exist")
+                else:
+                    node = existing
+
+            # At this point, 'node' is the namespace that will contain the variable
+            # Validate variable does not already exist
+            for i in range(1, node.Variables.Count + 1):
+                v = node.Variables.Item(i)
+                if v.Name == var_name:
+                    raise CANoeError(f"Variable '{var_name}' already exists in namespace '{'.'.join(namespaces) or '<root>'}'")
+
+            # Create variable; set type when supported
+            var = node.Variables.AddWriteableEx(var_name, initial_value, min_value, max_value)
+            try:
+                var.Type = datatype
+            except Exception:
+                # Some CANoe versions may not expose Type set; ignore if unsupported
+                pass
+        except Exception as exc:
+            raise CANoeError(f"Failed to add system variable '{path}': {exc}")
+
     # Helpers
     @staticmethod
     def _now() -> float:
