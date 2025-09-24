@@ -27,6 +27,23 @@ python -m dsl_parser.cli examples/TC-001.dsl -o examples/TC-001.json
 - `flow`: resolved execution order (inline checks are inserted after their SET)
 - `phase_order`: default phase order when no inline checks are used
 
+## CANoe Controller (COM)
+
+Minimal controller to operate measurement and read/write variables, assuming CANoe lifecycle is managed externally (e.g., Simulink).
+
+### Usage
+
+```python
+from canoe_control import CANoeCOMController
+
+ctl = CANoeCOMController()
+ctl.start_measurement()
+ctl.write_environment_variable("MyEnv", 1)
+val = ctl.read_system_variable("MyNs.SubNs.MyVar")
+ctl.stop_measurement()
+```
+
+
 # BEV+GPS to OpenDRIVE (XODR) Converter
 
 This project converts ego-centric BEV lane perception and GPS trajectory data into an OpenDRIVE (XODR) road description suitable for VTD simulations.
