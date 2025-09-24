@@ -37,10 +37,13 @@ Minimal controller to operate measurement and read/write variables, assuming CAN
 from canoe_control import create_controller
 
 ctl = create_controller()
+# Optional: open-loop control of CANoe application
+# ctl.start_application(cfg_path=r"C:\path\to\config.cfg", visible=True)
 ctl.start_measurement()
 ctl.write_environment_variable("MyEnv", 1)
 val = ctl.read_system_variable("MyNs.SubNs.MyVar")
 ctl.stop_measurement()
+# ctl.close_application()
 ```
 
 

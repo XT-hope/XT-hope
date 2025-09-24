@@ -45,3 +45,18 @@ class CANoeController(ABC):
     def write_environment_variable(self, name: str, value: Any) -> None:
         """Write an environment variable by name."""
 
+    # Optional application lifecycle (open-loop testing)
+    def start_application(self, cfg_path: str | None = None, visible: bool = True) -> None:
+        """Start/attach CANoe application and optionally open a configuration.
+
+        Default implementation is a no-op for implementations that rely on external lifecycle.
+        """
+        return None
+
+    def close_application(self) -> None:
+        """Close/detach CANoe application if owned by the controller.
+
+        Default implementation is a no-op for implementations that rely on external lifecycle.
+        """
+        return None
+

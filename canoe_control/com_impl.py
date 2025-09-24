@@ -21,6 +21,7 @@ class CANoeCOMController(CANoeController):
     def __init__(self, app_dispatch: str = "CANoe.Application") -> None:
         if win32com is None:
             raise CANoeError("pywin32 is required to use CANoe COM controller (win32com.client not available)")
+        self._app_dispatch = app_dispatch
         try:
             self._app = win32com.client.Dispatch(app_dispatch)
         except Exception as exc:  # pragma: no cover
@@ -33,6 +34,25 @@ class CANoeCOMController(CANoeController):
             self._system = self._app.System
         except Exception as exc:  # pragma: no cover
             raise CANoeError(f"Failed to acquire CANoe COM interfaces: {exc}")
+
+    # Application lifecycle (optional)
+    def start_application(self, cfg_path: str | None = None, visible: bool = True) -> None:
+        try:
+            # Re-dispatch in case application is not running
+            self._app = win32com.client.Dispatch(self._app_dispatch)
+            self._app.Visible = bool(visible)
+            if cfg_path:
+                self._app.Open(cfg_path)
+        except Exception as exc:  # pragma: no cover
+            raise CANoeError(f"Failed to start/open CANoe application: {exc}")
+
+    def close_application(self) -> None:
+        try:
+            # Only attempt Quit if COM object exists
+            if getattr(self, "_app", None) is not None:
+                self._app.Quit()
+        except Exception as exc:  # pragma: no cover
+            raise CANoeError(f"Failed to close CANoe application: {exc}")
 
     # Measurement
     def start_measurement(self, timeout_s: float = 10.0) -> None:
