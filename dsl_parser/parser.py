@@ -168,9 +168,11 @@ def _parse_set_step(line: str) -> Tuple[Dict[str, Any], Optional[List[str]]]:
     Returns (step_dict, inline_checks or None)
     """
 
+    # Support multiple assignments joined by '&&':
+    #   S2: set SignalB = 0 && SignalD = 2 within 100ms then CHECK C1
     m = re.fullmatch(
-        r"\s*(?P<id>\w+)\s*:\s*set\s+"
-        r"(?P<signal>[A-Za-z_]\w*)\s*=\s*(?P<value>[^\s]+)"
+        r"\s*(?P<id>[Ss]\w*)\s*:\s*set\s+"
+        r"(?P<assignments>.+?)"
         r"(?:\s+within\s+(?P<within>[^\s]+))?"
         r"(?:\s+then\s+CHECK\s+(?P<checks>.+))?\s*",
         line,
@@ -180,17 +182,33 @@ def _parse_set_step(line: str) -> Tuple[Dict[str, Any], Optional[List[str]]]:
         raise ParserError(f"Invalid SET line: '{line.strip()}'")
 
     step_id = m.group("id")
-    signal_name = m.group("signal")
-    value_raw = m.group("value")
+    assignments_raw = m.group("assignments")
     within_raw = m.group("within")
     checks_raw = m.group("checks")
+
+    # Parse one or more assignments: Signal = value [&& Signal2 = value2 ...]
+    assignment_parts = [part.strip() for part in re.split(r"\s*&&\s*", assignments_raw) if part.strip()]
+    if not assignment_parts:
+        raise ParserError(f"SET '{step_id}' missing assignments")
+    assignments: List[Dict[str, Any]] = []
+    for part in assignment_parts:
+        am = re.fullmatch(r"(?P<signal>[A-Za-z_]\w*)\s*=\s*(?P<value>[^\s]+)", part)
+        if not am:
+            raise ParserError(f"Invalid assignment in SET '{step_id}': '{part}' (expected 'Signal = value')")
+        assignments.append({
+            "signal": am.group("signal"),
+            "value": _parse_scalar_value(am.group("value")),
+        })
 
     step: Dict[str, Any] = {
         "id": step_id,
         "type": _SECTION_SET,
-        "signal": signal_name,
-        "value": _parse_scalar_value(value_raw),
+        # For backward compatibility, also expose single 'signal'/'value' when only one assignment
     }
+    if len(assignments) == 1:
+        step["signal"] = assignments[0]["signal"]
+        step["value"] = assignments[0]["value"]
+    step["assignments"] = assignments
     if within_raw:
         step["within_ms"] = parse_duration_to_ms(within_raw)
 

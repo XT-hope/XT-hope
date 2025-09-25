@@ -12,13 +12,27 @@
       "type": "set",
       "signal": "SignalA",
       "value": 1,
+      "assignments": [
+        {
+          "signal": "SignalA",
+          "value": 1
+        }
+      ],
       "within_ms": 200
     },
     {
       "id": "S2",
       "type": "set",
-      "signal": "SignalB",
-      "value": 0,
+      "assignments": [
+        {
+          "signal": "SignalB",
+          "value": 0
+        },
+        {
+          "signal": "SignalD",
+          "value": 2
+        }
+      ],
       "within_ms": 100,
       "inline_checks": [
         "C1"
@@ -28,7 +42,13 @@
       "id": "S3",
       "type": "set",
       "signal": "SignalC",
-      "value": 3
+      "value": 3,
+      "assignments": [
+        {
+          "signal": "SignalC",
+          "value": 3
+        }
+      ]
     },
     {
       "id": "C1",
