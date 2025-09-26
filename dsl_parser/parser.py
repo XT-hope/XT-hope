@@ -19,13 +19,14 @@ Grammar (informal):
   [CHECK]
   C1: check SignalX == 1 timeoutOfCheck 1500ms [count >= 1] [after 100ms]
   C2: check SignalY in {2,3} timeoutOfCheck 1000ms [count == 2]
-  C3: check SignalZ in 2..5 timeoutOfCheck 2s [after EventReady@500ms]
+  C3: check SignalZ in 2..5 timeoutOfCheck 2s [after 100ms]
 
 Shorthand / legacy support:
   - timeoutOfCheck <dur>   (preferred; equivalent to legacy 'window 0..<dur>')
   - window 0..<dur>        (legacy, maps to timeoutOfCheck_ms)
   - window <dur>           (legacy, maps to timeoutOfCheck_ms)
   - window <a>..<b>        (legacy range; preserved as window_ms [a,b])
+  - after <dur>            (only duration form is supported; event forms are not allowed)
 
 Also supports the more verbose legacy forms:
   - after_detect wait_event EventName timeout 500ms
@@ -281,7 +282,7 @@ def _parse_check_step(line: str, defaults: ParserDefaults) -> Dict[str, Any]:
       C2: check SignalY in {2,3} window 200..1000ms after 100ms
       C3: check SignalZ in 2..5 window 0..2s
 
-    Also supports legacy verbose 'after_detect' forms.
+    Note: Only 'after <duration>' is supported. Event-based 'after' forms are not allowed.
     """
 
     m = re.fullmatch(r"\s*(?P<id>\w+)\s*:\s*check\s+(?P<signal>[A-Za-z_]\w*)\s+(?P<rest>.+)\s*",
@@ -362,44 +363,15 @@ def _parse_check_step(line: str, defaults: ParserDefaults) -> Dict[str, Any]:
         else:
             raise ParserError(f"Unsupported count operator '{op}'")
 
-    # after (compact forms)
-    #  - after 100ms
-    #  - after EventReady@500ms  (default timeout if missing)
+    # after <duration> only
     m_after_sleep, tail2 = _consume(r"\bafter\s+(\d+(?:\.\d+)?(?:ms|s)?)\b", tail)
     if m_after_sleep:
         after_dict = {"type": "sleep", "ms": parse_duration_to_ms(m_after_sleep.group(1))}
         tail = tail2
-    else:
-        m_after_event, tail2 = _consume(r"\bafter\s+([A-Za-z_]\w*)(?:@([^\s]+))?\b", tail)
-        if m_after_event:
-            event_name = m_after_event.group(1)
-            timeout_raw = m_after_event.group(2)
-            timeout_ms = (
-                parse_duration_to_ms(timeout_raw)
-                if timeout_raw
-                else defaults.default_event_timeout_ms
-            )
-            after_dict = {"type": "event", "name": event_name, "timeout_ms": timeout_ms}
-            tail = tail2
 
-    # after_detect legacy forms
-    if re.search(r"\bafter_detect\b", tail, flags=re.IGNORECASE):
-        # after_detect wait_event <Event> timeout <dur>
-        m_legacy_event, tail = _consume(
-            r"\bafter_detect\s+wait_event\s+([A-Za-z_]\w*)\s+timeout\s+([^\s]+)",
-            tail,
-        )
-        if m_legacy_event:
-            after_dict = {
-                "type": "event",
-                "name": m_legacy_event.group(1),
-                "timeout_ms": parse_duration_to_ms(m_legacy_event.group(2)),
-            }
-        else:
-            # after_detect wait <dur>
-            m_legacy_sleep, tail = _consume(r"\bafter_detect\s+wait\s+([^\s]+)", tail)
-            if m_legacy_sleep:
-                after_dict = {"type": "sleep", "ms": parse_duration_to_ms(m_legacy_sleep.group(1))}
+    # reject any remaining 'after' tokens explicitly (only duration form allowed)
+    if re.search(r"\bafter\b", tail, flags=re.IGNORECASE):
+        raise ParserError("Only 'after <duration>' is supported (e.g., 'after 100ms')")
 
     tail = tail.strip()
     if tail:

@@ -7,6 +7,6 @@ S2: set SignalB = 0 && SignalD = 2 within 100ms then CHECK C1
 S3: set SignalC = 3
 
 [CHECK]
-C1: check SignalX == 1 timeoutOfCheck 1500ms after EventReady@500ms count >= 1
+C1: check SignalX == 1 timeoutOfCheck 1500ms after 100ms count >= 1
 C2: check SignalY in {2,3} timeoutOfCheck 1000ms after 100ms count == 2
 

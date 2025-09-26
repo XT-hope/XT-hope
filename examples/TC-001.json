@@ -60,9 +60,8 @@
       },
       "timeoutOfCheck_ms": 1500,
       "after_detect": {
-        "type": "event",
-        "name": "EventReady",
-        "timeout_ms": 500
+        "type": "sleep",
+        "ms": 100
       },
       "count": {
         "min": 1
