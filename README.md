@@ -1,3 +1,52 @@
+## Canoe DSL → JSON Converter
+
+Parse human-friendly test DSL into structured JSON test cases.
+
+### Quick start
+
+1) Example DSL at `examples/TC-001.dsl`.
+
+2) Convert to JSON:
+
+```bash
+python -m dsl_parser.cli examples/TC-001.dsl -o examples/TC-001.json
+```
+
+3) Options:
+- `--event-timeout-ms` default timeout for `after EventName` when not specified (ms).
+
+### DSL highlights
+- Sections: `[SET]` and `[CHECK]` after `CASE:` and optional `META:`.
+- SET: `Sx: set SignalA = 1 within 200ms [then CHECK C1,C2]`
+- CHECK: `Cx: check SignalX == 1 window 0..1500ms [count >= 1] [after 100ms | after EventReady@500ms]`
+- Assertions: `== v` | `in {a,b}` | `in a..b`
+- Durations: `200ms`, `2s`; default `ms` if unit omitted.
+
+### Output JSON shape
+- `steps`: `{type: 'set'|'check', ...}`
+- `flow`: resolved execution order (inline checks are inserted after their SET)
+- `phase_order`: default phase order when no inline checks are used
+
+## CANoe Controller (COM)
+
+Minimal controller to operate measurement and read/write variables, assuming CANoe lifecycle is managed externally (e.g., Simulink).
+
+### Usage
+
+```python
+from canoe_control import create_controller
+
+ctl = create_controller()
+# Optional: open-loop control of CANoe application
+# ctl.start_application(cfg_path=r"C:\path\to\config.cfg", visible=True)
+ctl.start_measurement()
+ctl.write_environment_variable("MyEnv", 1)
+val = ctl.read_system_variable("MyNs.SubNs.MyVar")
+ctl.stop_measurement()
+# ctl.close_application()
+```
+
+
 # BEV+GPS to OpenDRIVE (XODR) Converter
 
 This project converts ego-centric BEV lane perception and GPS trajectory data into an OpenDRIVE (XODR) road description suitable for VTD simulations.

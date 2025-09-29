@@ -1,0 +1,102 @@
+{
+  "case_id": "TC-001",
+  "name": "SetAndCheckSignals",
+  "meta": {
+    "priority": "P1",
+    "owner": "QA",
+    "requirement": "REQ-123"
+  },
+  "steps": [
+    {
+      "id": "S1",
+      "type": "set",
+      "signal": "sig::SignalA",
+      "value": 1,
+      "assignments": [
+        {
+          "signal": "sig::SignalA",
+          "value": 1
+        }
+      ],
+      "within_ms": 200
+    },
+    {
+      "id": "S2",
+      "type": "set",
+      "assignments": [
+        {
+          "signal": "env::SignalB",
+          "value": 0
+        },
+        {
+          "signal": "sys::SignalD",
+          "value": 2
+        }
+      ],
+      "within_ms": 100,
+      "inline_checks": [
+        "C1"
+      ]
+    },
+    {
+      "id": "S3",
+      "type": "set",
+      "signal": "sig::SignalC",
+      "value": 3,
+      "assignments": [
+        {
+          "signal": "sig::SignalC",
+          "value": 3
+        }
+      ]
+    },
+    {
+      "id": "C1",
+      "type": "check",
+      "signal": "sig::SignalX",
+      "assert": {
+        "op": "eq",
+        "value": 1
+      },
+      "timeoutOfCheck_ms": 1500,
+      "after_detect": {
+        "type": "sleep",
+        "ms": 100
+      },
+      "count": {
+        "min": 1
+      }
+    },
+    {
+      "id": "C2",
+      "type": "check",
+      "signal": "env::SignalY",
+      "assert": {
+        "op": "in",
+        "values": [
+          2,
+          3
+        ]
+      },
+      "timeoutOfCheck_ms": 1000,
+      "after_detect": {
+        "type": "sleep",
+        "ms": 100
+      },
+      "count": {
+        "exact": 2
+      }
+    }
+  ],
+  "phase_order": [
+    "set",
+    "check"
+  ],
+  "flow": [
+    "S1",
+    "S2",
+    "C1",
+    "S3",
+    "C2"
+  ]
+}
