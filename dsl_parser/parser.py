@@ -107,10 +107,12 @@ def parse_duration_to_ms(raw: str) -> int:
 
 
 def _parse_scalar_value(raw: str) -> Any:
-    """Parse a scalar token into int/float if numeric, else as string.
+    """Parse a scalar token into int/float if numeric (supports hex), else string.
 
-    For integers (e.g., "3"), returns int 3. For floats ("3.14"), returns float.
-    Otherwise returns the original string (without surrounding quotes if present).
+    - Integers: 42, -7
+    - Floats: 1.0, .5, 3., 1e-3
+    - Hex: 0x1A2B (optional sign)
+    Otherwise returns the original string (quotes stripped if present).
     """
 
     token = raw.strip()
@@ -120,14 +122,25 @@ def _parse_scalar_value(raw: str) -> Any:
     ):
         return token[1:-1]
 
-    # Try int
-    if re.fullmatch(r"-?\d+", token):
+    # Hex integer literal, optional sign
+    if re.fullmatch(r"[-+]?0[xX][0-9A-Fa-f]+", token):
+        try:
+            return int(token, 16)
+        except ValueError:
+            pass
+
+    # Decimal integer (optional sign)
+    if re.fullmatch(r"[-+]?\d+", token):
         try:
             return int(token)
         except ValueError:
             pass
-    # Try float
-    if re.fullmatch(r"-?\d+\.\d+", token):
+
+    # Float (optional sign, supports scientific notation)
+    if (
+        re.fullmatch(r"[-+]?(?:\d+\.\d*|\d*\.\d+)(?:[eE][+-]?\d+)?", token)
+        or re.fullmatch(r"[-+]?\d+(?:[eE][+-]?\d+)", token)
+    ):
         try:
             return float(token)
         except ValueError:
@@ -285,7 +298,8 @@ def _parse_check_step(line: str, defaults: ParserDefaults) -> Dict[str, Any]:
     Note: Only 'after <duration>' is supported. Event-based 'after' forms are not allowed.
     """
 
-    m = re.fullmatch(r"\s*(?P<id>\w+)\s*:\s*check\s+(?P<signal>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s+(?P<rest>.+)\s*",
+    # Allow spaces within namespaced parts (e.g., 'sig::CAN 1::ADC_0x29C::CSW_Stats_S')
+    m = re.fullmatch(r"\s*(?P<id>\w+)\s*:\s*check\s+(?P<signal>[A-Za-z_][\w ]*(?:::[A-Za-z_][\w ]*)*)\s+(?P<rest>.+)\s*",
                       line, flags=re.IGNORECASE)
     if not m:
         raise ParserError(f"Invalid CHECK line: '{line.strip()}'")
