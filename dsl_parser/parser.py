@@ -193,7 +193,7 @@ def _parse_set_step(line: str) -> Tuple[Dict[str, Any], Optional[List[str]]]:
         raise ParserError(f"SET '{step_id}' missing assignments")
     assignments: List[Dict[str, Any]] = []
     for part in assignment_parts:
-        am = re.fullmatch(r"(?P<signal>[A-Za-z_]\w*)\s*=\s*(?P<value>[^\s]+)", part)
+        am = re.fullmatch(r"(?P<signal>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s*=\s*(?P<value>[^\s]+)", part)
         if not am:
             raise ParserError(f"Invalid assignment in SET '{step_id}': '{part}' (expected 'Signal = value')")
         assignments.append({
@@ -285,7 +285,7 @@ def _parse_check_step(line: str, defaults: ParserDefaults) -> Dict[str, Any]:
     Note: Only 'after <duration>' is supported. Event-based 'after' forms are not allowed.
     """
 
-    m = re.fullmatch(r"\s*(?P<id>\w+)\s*:\s*check\s+(?P<signal>[A-Za-z_]\w*)\s+(?P<rest>.+)\s*",
+    m = re.fullmatch(r"\s*(?P<id>\w+)\s*:\s*check\s+(?P<signal>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s+(?P<rest>.+)\s*",
                       line, flags=re.IGNORECASE)
     if not m:
         raise ParserError(f"Invalid CHECK line: '{line.strip()}'")

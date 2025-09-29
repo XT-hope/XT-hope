@@ -10,11 +10,11 @@
     {
       "id": "S1",
       "type": "set",
-      "signal": "SignalA",
+      "signal": "sig::SignalA",
       "value": 1,
       "assignments": [
         {
-          "signal": "SignalA",
+          "signal": "sig::SignalA",
           "value": 1
         }
       ],
@@ -25,11 +25,11 @@
       "type": "set",
       "assignments": [
         {
-          "signal": "SignalB",
+          "signal": "env::SignalB",
           "value": 0
         },
         {
-          "signal": "SignalD",
+          "signal": "sys::SignalD",
           "value": 2
         }
       ],
@@ -41,11 +41,11 @@
     {
       "id": "S3",
       "type": "set",
-      "signal": "SignalC",
+      "signal": "sig::SignalC",
       "value": 3,
       "assignments": [
         {
-          "signal": "SignalC",
+          "signal": "sig::SignalC",
           "value": 3
         }
       ]
@@ -53,7 +53,7 @@
     {
       "id": "C1",
       "type": "check",
-      "signal": "SignalX",
+      "signal": "sig::SignalX",
       "assert": {
         "op": "eq",
         "value": 1
@@ -70,7 +70,7 @@
     {
       "id": "C2",
       "type": "check",
-      "signal": "SignalY",
+      "signal": "env::SignalY",
       "assert": {
         "op": "in",
         "values": [
