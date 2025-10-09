@@ -156,6 +156,7 @@ class BLFSignalExtractor:
         end_time: Optional[float] = None,
         time_origin: Optional[object] = "keep",
         time_unit: str = "s",
+        time_decimals: int = 6,
     ) -> Dict[str, List[Tuple[float, float]]]:
         """
         将同一信号的数据聚合到一起并按时间戳升序排序。
@@ -175,6 +176,8 @@ class BLFSignalExtractor:
             - float/int: 视为自定义起点（单位：秒，通常是某个 epoch）
         time_unit:
             - "s" | "ms" | "us"，默认 "s"
+        time_decimals:
+            - 对归一化后的时间进行 round，默认 6 位小数（便于绘图/导出）
         """
         grouped: Dict[str, List[Tuple[float, float]]] = {}
         for rec in self.iter_signals(
@@ -226,7 +229,13 @@ class BLFSignalExtractor:
         normalized: Dict[str, List[Tuple[float, float]]] = {}
         for key, series in grouped.items():
             offset = offsets.get(key, 0.0)
-            normalized[key] = [((ts - offset) * factor, val) for ts, val in series]
+            if time_decimals is not None and time_decimals >= 0:
+                normalized[key] = [
+                    (round((ts - offset) * factor, time_decimals), val)
+                    for ts, val in series
+                ]
+            else:
+                normalized[key] = [((ts - offset) * factor, val) for ts, val in series]
 
         return normalized
 
