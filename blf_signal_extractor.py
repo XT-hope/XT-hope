@@ -154,7 +154,7 @@ class BLFSignalExtractor:
         channels: Optional[Set[int]] = None,
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
-        time_origin: Optional[object] = "keep",
+        time_origin: str = "keep",
         time_unit: str = "s",
         time_decimals: int = 6,
     ) -> Dict[str, List[Tuple[float, float]]]:
@@ -172,8 +172,6 @@ class BLFSignalExtractor:
         time_origin:
             - "keep": 不做归一化，保留原始秒时间戳
             - "global_min": 全局减去最小时间戳，使起点约为 0
-            - "per_signal_first": 每个信号各自减去本信号第一条的时间戳
-            - float/int: 视为自定义起点（单位：秒，通常是某个 epoch）
         time_unit:
             - "s" | "ms" | "us"，默认 "s"
         time_decimals:
@@ -196,23 +194,15 @@ class BLFSignalExtractor:
 
         # 归一化与单位转换
         if time_origin is not None and time_origin != "keep":
-            # 计算全局或分信号偏移
-            if isinstance(time_origin, (int, float)):
-                global_offset = float(time_origin)
-                offsets: Dict[str, float] = {k: global_offset for k in grouped.keys()}
-            elif time_origin == "global_min":
+            if time_origin == "global_min":
                 # 全局最小时间戳
                 try:
                     global_min = min(ts for series in grouped.values() for ts, _ in series)
                 except ValueError:
                     global_min = 0.0
                 offsets = {k: global_min for k in grouped.keys()}
-            elif time_origin == "per_signal_first":
-                offsets = {k: (series[0][0] if series else 0.0) for k, series in grouped.items()}
             else:
-                raise ValueError(
-                    "time_origin 仅支持 'keep' | 'global_min' | 'per_signal_first' | float/int"
-                )
+                raise ValueError("time_origin 仅支持 'keep' | 'global_min'")
         else:
             offsets = {k: 0.0 for k in grouped.keys()}
 
