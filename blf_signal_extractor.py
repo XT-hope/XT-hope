@@ -154,6 +154,8 @@ class BLFSignalExtractor:
         channels: Optional[Set[int]] = None,
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
+        time_origin: Optional[object] = "keep",
+        time_unit: str = "s",
     ) -> Dict[str, List[Tuple[float, float]]]:
         """
         将同一信号的数据聚合到一起并按时间戳升序排序。
@@ -163,6 +165,16 @@ class BLFSignalExtractor:
         Dict[str, List[Tuple[float, float]]]
             key: "{message}.{signal}"
             value: 时间序列 [(timestamp, value_float), ...]，按 timestamp 升序
+
+        参数
+        ------
+        time_origin:
+            - "keep": 不做归一化，保留原始秒时间戳
+            - "global_min": 全局减去最小时间戳，使起点约为 0
+            - "per_signal_first": 每个信号各自减去本信号第一条的时间戳
+            - float/int: 视为自定义起点（单位：秒，通常是某个 epoch）
+        time_unit:
+            - "s" | "ms" | "us"，默认 "s"
         """
         grouped: Dict[str, List[Tuple[float, float]]] = {}
         for rec in self.iter_signals(
@@ -179,7 +191,44 @@ class BLFSignalExtractor:
         for series in grouped.values():
             series.sort(key=lambda pair: pair[0])
 
-        return grouped
+        # 归一化与单位转换
+        if time_origin is not None and time_origin != "keep":
+            # 计算全局或分信号偏移
+            if isinstance(time_origin, (int, float)):
+                global_offset = float(time_origin)
+                offsets: Dict[str, float] = {k: global_offset for k in grouped.keys()}
+            elif time_origin == "global_min":
+                # 全局最小时间戳
+                try:
+                    global_min = min(ts for series in grouped.values() for ts, _ in series)
+                except ValueError:
+                    global_min = 0.0
+                offsets = {k: global_min for k in grouped.keys()}
+            elif time_origin == "per_signal_first":
+                offsets = {k: (series[0][0] if series else 0.0) for k, series in grouped.items()}
+            else:
+                raise ValueError(
+                    "time_origin 仅支持 'keep' | 'global_min' | 'per_signal_first' | float/int"
+                )
+        else:
+            offsets = {k: 0.0 for k in grouped.keys()}
+
+        # 单位系数
+        if time_unit == "s":
+            factor = 1.0
+        elif time_unit == "ms":
+            factor = 1e3
+        elif time_unit == "us":
+            factor = 1e6
+        else:
+            raise ValueError("time_unit 仅支持 's' | 'ms' | 'us'")
+
+        normalized: Dict[str, List[Tuple[float, float]]] = {}
+        for key, series in grouped.items():
+            offset = offsets.get(key, 0.0)
+            normalized[key] = [((ts - offset) * factor, val) for ts, val in series]
+
+        return normalized
 
     # ------------------------------ internal impl -----------------------------
     def _load_databases(self, dbc_paths: List[str]) -> None:
