@@ -146,6 +146,41 @@ class BLFSignalExtractor:
                 break
         return out
 
+    def collect_grouped_series(
+        self,
+        blf_path: str,
+        targets: Mapping[str, Sequence[str]],
+        *,
+        channels: Optional[Set[int]] = None,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
+    ) -> Dict[str, List[Tuple[float, float]]]:
+        """
+        将同一信号的数据聚合到一起并按时间戳升序排序。
+
+        返回
+        ------
+        Dict[str, List[Tuple[float, float]]]
+            key: "{message}.{signal}"
+            value: 时间序列 [(timestamp, value_float), ...]，按 timestamp 升序
+        """
+        grouped: Dict[str, List[Tuple[float, float]]] = {}
+        for rec in self.iter_signals(
+            blf_path,
+            targets,
+            channels=channels,
+            start_time=start_time,
+            end_time=end_time,
+        ):
+            key = f"{rec.message}.{rec.signal}"
+            grouped.setdefault(key, []).append((rec.timestamp, rec.value))
+
+        # 对每个信号的时间序列进行排序（按时间戳）
+        for series in grouped.values():
+            series.sort(key=lambda pair: pair[0])
+
+        return grouped
+
     # ------------------------------ internal impl -----------------------------
     def _load_databases(self, dbc_paths: List[str]) -> None:
         for path in dbc_paths:
