@@ -461,10 +461,10 @@ class BLFSignalExtractor:
         return message_to_signals
 
     def _parse_signal_token(self, token: str) -> Optional[Tuple[str, str, str]]:
-        """解析形如 "BUS::MESSAGE::SIGNAL" 的 token。允许包含空格。
+        """解析形如 "CAN X::MESSAGE::SIGNAL" 的 token（总线名限定为 CAN+数字）。
         返回 (bus, message, signal)；若无法解析返回 None。
         """
-        m = re.fullmatch(r"\s*([^:]+?)\s*::\s*([^:]+?)\s*::\s*([^:]+?)\s*", token)
+        m = re.fullmatch(r"\s*(CAN\s*\d+)\s*::\s*([^:]+?)\s*::\s*([^:]+?)\s*", token)
         if not m:
             return None
         bus, message, signal = m.group(1), m.group(2), m.group(3)
