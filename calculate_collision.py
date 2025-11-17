@@ -103,19 +103,19 @@ def calculate_collision_coordinates():
     print("车辆参数")
     print("=" * 60)
     print(f"A车（目标车）：")
-    print(f"  尺寸：长{vehicle_a.length}m × 宽{vehicle_a.width}m")
-    print(f"  中心位置：车尾{vehicle_a.center_to_rear}m | 车头{vehicle_a.center_to_front}m")
-    print(f"  速度：纵向{60}km/h ({a_vx:.2f}m/s)，横向{a_vy}m/s")
-    print(f"  初始位置：({a_initial_x}, {a_initial_y})")
+    print(f"  尺寸：长{vehicle_a.length:.4f}m × 宽{vehicle_a.width:.4f}m")
+    print(f"  中心位置：车尾{vehicle_a.center_to_rear:.4f}m | 车头{vehicle_a.center_to_front:.4f}m")
+    print(f"  速度：纵向{60}km/h ({a_vx:.4f}m/s)，横向{a_vy:.4f}m/s")
+    print(f"  初始位置：({a_initial_x:.4f}, {a_initial_y:.4f})")
     print()
     print(f"B车（测试车）：")
-    print(f"  尺寸：长{vehicle_b.length}m × 宽{vehicle_b.width}m")
-    print(f"  中心位置：车尾{vehicle_b.center_to_rear}m | 车头{vehicle_b.center_to_front}m")
-    print(f"  速度：纵向{50}km/h ({b_vx:.2f}m/s)，横向{b_vy}m/s")
-    print(f"  航向角(Heading)：{b_heading_deg:.4f}度 ({b_heading_rad:.6f}弧度)")
+    print(f"  尺寸：长{vehicle_b.length:.4f}m × 宽{vehicle_b.width:.4f}m")
+    print(f"  中心位置：车尾{vehicle_b.center_to_rear:.4f}m | 车头{vehicle_b.center_to_front:.4f}m")
+    print(f"  速度：纵向{50}km/h ({b_vx:.4f}m/s)，横向{b_vy:.4f}m/s")
+    print(f"  航向角(Heading)：{b_heading_deg:.4f}度 ({b_heading_rad:.4f}弧度)")
     print(f"  速度矢量方向：与X轴正方向夹角{b_heading_deg:.4f}度")
     print()
-    print(f"初始横向距离：{lateral_distance}m")
+    print(f"初始横向距离：{lateral_distance:.4f}m")
     print()
     
     # 碰撞点条件：
@@ -136,9 +136,9 @@ def calculate_collision_coordinates():
     print("碰撞条件计算")
     print("=" * 60)
     print(f"碰撞点：A车右上顶点 与 B车左侧边框（距车尾1.25m处）")
-    print(f"A车右上顶点y坐标：{a_right_top_y}m（固定）")
-    print(f"B车需要横向移动的距离：{a_right_top_y - b_initial_y - vehicle_b.width / 2:.2f}m")
-    print(f"碰撞时间：{collision_time:.2f}秒")
+    print(f"A车右上顶点y坐标：{a_right_top_y:.4f}m（固定）")
+    print(f"B车需要横向移动的距离：{a_right_top_y - b_initial_y - vehicle_b.width / 2:.4f}m")
+    print(f"碰撞时间：{collision_time:.4f}秒")
     print()
     
     # 计算碰撞时刻A车的位置
@@ -168,16 +168,16 @@ def calculate_collision_coordinates():
     print("计算结果")
     print("=" * 60)
     print(f"\nB车起始位置（中心点）：")
-    print(f"  x = {b_initial_x:.2f}m")
-    print(f"  y = {b_initial_y:.2f}m")
-    print(f"  坐标：({b_initial_x:.2f}, {b_initial_y:.2f})")
-    print(f"  航向角(Heading)：{b_heading_deg:.4f}度 ({b_heading_rad:.6f}弧度)")
+    print(f"  x = {b_initial_x:.4f}m")
+    print(f"  y = {b_initial_y:.4f}m")
+    print(f"  坐标：({b_initial_x:.4f}, {b_initial_y:.4f})")
+    print(f"  航向角(Heading)：{b_heading_deg:.4f}度 ({b_heading_rad:.4f}弧度)")
     print()
     print(f"碰撞时B车中心点位置：")
-    print(f"  x = {b_collision_x:.2f}m")
-    print(f"  y = {b_collision_y:.2f}m")
-    print(f"  坐标：({b_collision_x:.2f}, {b_collision_y:.2f})")
-    print(f"  航向角(Heading)：{b_heading_deg:.4f}度 ({b_heading_rad:.6f}弧度)")
+    print(f"  x = {b_collision_x:.4f}m")
+    print(f"  y = {b_collision_y:.4f}m")
+    print(f"  坐标：({b_collision_x:.4f}, {b_collision_y:.4f})")
+    print(f"  航向角(Heading)：{b_heading_deg:.4f}度 ({b_heading_rad:.4f}弧度)")
     print()
     
     # 验证碰撞点
@@ -187,18 +187,18 @@ def calculate_collision_coordinates():
     
     # A车右上顶点
     a_collision_corners = vehicle_a.get_corners(a_collision_x, a_collision_y)
-    print(f"A车右上顶点：({a_collision_corners['front_right'][0]:.2f}, "
-          f"{a_collision_corners['front_right'][1]:.2f})")
+    print(f"A车右上顶点：({a_collision_corners['front_right'][0]:.4f}, "
+          f"{a_collision_corners['front_right'][1]:.4f})")
     
     # B车碰撞点（左侧边框距车尾1.25m处）
     b_collision_point_x = b_collision_x + b_collision_point_offset
     b_collision_point_y = b_collision_y - vehicle_b.width / 2
-    print(f"B车左侧边框（距车尾1.25m）：({b_collision_point_x:.2f}, {b_collision_point_y:.2f})")
+    print(f"B车左侧边框（距车尾1.25m）：({b_collision_point_x:.4f}, {b_collision_point_y:.4f})")
     
     # 检查是否匹配
     x_diff = abs(a_collision_corners['front_right'][0] - b_collision_point_x)
     y_diff = abs(a_collision_corners['front_right'][1] - b_collision_point_y)
-    print(f"\n坐标差异：dx = {x_diff:.6f}m, dy = {y_diff:.6f}m")
+    print(f"\n坐标差异：dx = {x_diff:.4f}m, dy = {y_diff:.4f}m")
     
     if x_diff < 0.01 and y_diff < 0.01:
         print("碰撞点计算正确")
@@ -209,10 +209,10 @@ def calculate_collision_coordinates():
     print("=" * 60)
     print("运动轨迹信息")
     print("=" * 60)
-    print(f"A车纵向移动距离：{a_vx * collision_time:.2f}m")
-    print(f"B车纵向移动距离：{b_vx * collision_time:.2f}m")
-    print(f"B车横向移动距离：{b_vy * collision_time:.2f}m")
-    print(f"两车纵向相对速度：{(a_vx - b_vx) * 3.6:.2f}km/h ({a_vx - b_vx:.2f}m/s)")
+    print(f"A车纵向移动距离：{a_vx * collision_time:.4f}m")
+    print(f"B车纵向移动距离：{b_vx * collision_time:.4f}m")
+    print(f"B车横向移动距离：{b_vy * collision_time:.4f}m")
+    print(f"两车纵向相对速度：{(a_vx - b_vx) * 3.6:.4f}km/h ({a_vx - b_vx:.4f}m/s)")
     print()
     
     return {
