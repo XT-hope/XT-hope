@@ -65,9 +65,14 @@ class Vehicle:
         return x, y
 
 
-def calculate_collision_coordinates():
+def calculate_collision_coordinates(a_speed_kmh=60.0, b_speed_kmh=50.0, b_lateral_speed_ms=0.3):
     """
     计算碰撞点的车辆坐标
+    
+    Args:
+        a_speed_kmh: A车纵向速度(km/h)，默认60
+        b_speed_kmh: B车纵向速度(km/h)，默认50
+        b_lateral_speed_ms: B车横向速度(m/s)，默认0.3
     
     Returns:
         dict: 包含起始坐标和碰撞坐标的字典
@@ -82,11 +87,11 @@ def calculate_collision_coordinates():
     a_initial_y = 3.5
     
     # 速度转换：km/h -> m/s
-    a_vx = 60.0 / 3.6  # 16.67 m/s
+    a_vx = a_speed_kmh / 3.6
     a_vy = 0.0
     
-    b_vx = 50.0 / 3.6  # 13.89 m/s
-    b_vy = 0.3  # m/s (向A车靠近，y方向正向)
+    b_vx = b_speed_kmh / 3.6
+    b_vy = b_lateral_speed_ms  # m/s (向A车靠近，y方向正向)
     
     # B车初始y坐标
     b_initial_y = 0.0
@@ -105,13 +110,13 @@ def calculate_collision_coordinates():
     print(f"A车（目标车）：")
     print(f"  尺寸：长{vehicle_a.length:.4f}m × 宽{vehicle_a.width:.4f}m")
     print(f"  中心位置：车尾{vehicle_a.center_to_rear:.4f}m | 车头{vehicle_a.center_to_front:.4f}m")
-    print(f"  速度：纵向{60}km/h ({a_vx:.4f}m/s)，横向{a_vy:.4f}m/s")
+    print(f"  速度：纵向{a_speed_kmh:.4f}km/h ({a_vx:.4f}m/s)，横向{a_vy:.4f}m/s")
     print(f"  初始位置：({a_initial_x:.4f}, {a_initial_y:.4f})")
     print()
     print(f"B车（测试车）：")
     print(f"  尺寸：长{vehicle_b.length:.4f}m × 宽{vehicle_b.width:.4f}m")
     print(f"  中心位置：车尾{vehicle_b.center_to_rear:.4f}m | 车头{vehicle_b.center_to_front:.4f}m")
-    print(f"  速度：纵向{50}km/h ({b_vx:.4f}m/s)，横向{b_vy:.4f}m/s")
+    print(f"  速度：纵向{b_speed_kmh:.4f}km/h ({b_vx:.4f}m/s)，横向{b_vy:.4f}m/s")
     print(f"  航向角(Heading)：{b_heading_deg:.4f}度 ({b_heading_rad:.4f}弧度)")
     print(f"  速度矢量方向：与X轴正方向夹角{b_heading_deg:.4f}度")
     print()
@@ -219,9 +224,49 @@ def calculate_collision_coordinates():
         'b_start_position': (b_initial_x, b_initial_y),
         'b_collision_position': (b_collision_x, b_collision_y),
         'collision_time': collision_time,
-        'collision_point': (b_collision_point_x, b_collision_point_y)
+        'collision_point': (b_collision_point_x, b_collision_point_y),
+        'b_heading_deg': b_heading_deg,
+        'b_heading_rad': b_heading_rad
     }
 
 
+def main():
+    """主函数，支持命令行参数或交互式输入"""
+    import sys
+    
+    if len(sys.argv) > 1:
+        # 命令行参数模式
+        if len(sys.argv) < 4:
+            print("使用方法：")
+            print(f"  {sys.argv[0]} <A车纵向速度(km/h)> <B车纵向速度(km/h)> <B车横向速度(m/s)>")
+            print(f"\n示例：")
+            print(f"  {sys.argv[0]} 60 50 0.3")
+            print(f"\n或者直接运行程序使用默认值：")
+            print(f"  {sys.argv[0]}")
+            sys.exit(1)
+        
+        try:
+            a_speed = float(sys.argv[1])
+            b_speed = float(sys.argv[2])
+            b_lateral = float(sys.argv[3])
+            
+            print(f"\n使用输入参数：")
+            print(f"  A车纵向速度：{a_speed:.4f} km/h")
+            print(f"  B车纵向速度：{b_speed:.4f} km/h")
+            print(f"  B车横向速度：{b_lateral:.4f} m/s")
+            print()
+            
+            result = calculate_collision_coordinates(a_speed, b_speed, b_lateral)
+        except ValueError:
+            print("错误：参数必须是数字")
+            sys.exit(1)
+    else:
+        # 使用默认值
+        print("使用默认参数计算（可通过命令行参数自定义）")
+        print("使用方法：python3 calculate_collision.py <A车速度(km/h)> <B车速度(km/h)> <B车横向速度(m/s)>")
+        print()
+        result = calculate_collision_coordinates()
+
+
 if __name__ == '__main__':
-    result = calculate_collision_coordinates()
+    main()
