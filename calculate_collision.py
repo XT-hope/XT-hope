@@ -3,6 +3,7 @@
 """
 计算ELKA overtaking功能测试中的车辆碰撞坐标
 """
+import math
 
 
 class Vehicle:
@@ -90,6 +91,11 @@ def calculate_collision_coordinates():
     # B车初始y坐标
     b_initial_y = 0.0
     
+    # 计算B车的heading角（航向角）
+    # heading = arctan(vy / vx)，结果为弧度
+    b_heading_rad = math.atan2(b_vy, b_vx)
+    b_heading_deg = math.degrees(b_heading_rad)
+    
     # 初始横向距离
     lateral_distance = abs(a_initial_y - b_initial_y)
     
@@ -106,6 +112,8 @@ def calculate_collision_coordinates():
     print(f"  尺寸：长{vehicle_b.length}m × 宽{vehicle_b.width}m")
     print(f"  中心位置：车尾{vehicle_b.center_to_rear}m | 车头{vehicle_b.center_to_front}m")
     print(f"  速度：纵向{50}km/h ({b_vx:.2f}m/s)，横向{b_vy}m/s")
+    print(f"  航向角(Heading)：{b_heading_deg:.4f}度 ({b_heading_rad:.6f}弧度)")
+    print(f"  速度矢量方向：与X轴正方向夹角{b_heading_deg:.4f}度")
     print()
     print(f"初始横向距离：{lateral_distance}m")
     print()
@@ -163,11 +171,13 @@ def calculate_collision_coordinates():
     print(f"  x = {b_initial_x:.2f}m")
     print(f"  y = {b_initial_y:.2f}m")
     print(f"  坐标：({b_initial_x:.2f}, {b_initial_y:.2f})")
+    print(f"  航向角(Heading)：{b_heading_deg:.4f}度 ({b_heading_rad:.6f}弧度)")
     print()
     print(f"碰撞时B车中心点位置：")
     print(f"  x = {b_collision_x:.2f}m")
     print(f"  y = {b_collision_y:.2f}m")
     print(f"  坐标：({b_collision_x:.2f}, {b_collision_y:.2f})")
+    print(f"  航向角(Heading)：{b_heading_deg:.4f}度 ({b_heading_rad:.6f}弧度)")
     print()
     
     # 验证碰撞点
