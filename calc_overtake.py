@@ -53,6 +53,8 @@ class CollisionResult:
     a_center_at_collision: Tuple[float, float]
     b_center_at_collision: Tuple[float, float]
     b_center_at_start: Tuple[float, float]
+    b_contact_point: Tuple[float, float]
+    contact_from_tail: float
 
 
 def kmh_to_mps(speed_kmh: float) -> float:
@@ -95,6 +97,10 @@ def compute_collision(
     x_b = x_a + center_offset
     y_b = Y_B0 + b_lat_speed_mps * t
 
+    contact_x = x_b + contact_offset_rel_center
+    contact_y = y_b + B_GEOM.half_width
+    contact_from_tail = contact_x - (x_b - B_GEOM.tail_to_center)
+
     x_b_start = x_b - v_b * t
     y_b_start = Y_B0
 
@@ -104,6 +110,8 @@ def compute_collision(
         a_center_at_collision=(x_a, y_a),
         b_center_at_collision=(x_b, y_b),
         b_center_at_start=(x_b_start, y_b_start),
+        b_contact_point=(contact_x, contact_y),
+        contact_from_tail=contact_from_tail,
     )
 
 
@@ -132,6 +140,11 @@ def main() -> None:
     print(
         "B 车碰撞时中心: "
         f"({result.b_center_at_collision[0]:.6f}, {result.b_center_at_collision[1]:.6f}) m"
+    )
+    print(
+        "B 车接触点: "
+        f"({result.b_contact_point[0]:.6f}, {result.b_contact_point[1]:.6f}) m "
+        f"(距车尾 {result.contact_from_tail:.6f} m)"
     )
     print(
         "B 车起始中心: "
