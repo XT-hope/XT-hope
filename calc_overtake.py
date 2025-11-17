@@ -41,8 +41,8 @@ A_GEOM = VehicleGeometry(length=4.7, width=1.8, tail_to_center=1.7, head_to_cent
 B_GEOM = VehicleGeometry(length=5.0, width=1.8, tail_to_center=1.0, head_to_center=4.0)
 
 X_A0 = -26.0
-Y_A0 = 3.5
-Y_B0 = 0.0
+DEFAULT_A_Y0 = 3.5
+DEFAULT_B_Y0 = 0.0
 B_CONTACT_FROM_TAIL = 1.25
 
 
@@ -75,7 +75,11 @@ def resolve_heading(b_long_speed_kmh: float, b_lat_speed_mps: float) -> Tuple[fl
 
 
 def compute_collision(
-    a_speed_kmh: float, b_long_speed_kmh: float, b_lat_speed_mps: float
+    a_speed_kmh: float,
+    b_long_speed_kmh: float,
+    b_lat_speed_mps: float,
+    a_y0: float = DEFAULT_A_Y0,
+    b_y0: float = DEFAULT_B_Y0,
 ) -> CollisionResult:
     v_a = kmh_to_mps(a_speed_kmh)
     v_b, heading_rad, heading = resolve_heading(b_long_speed_kmh, b_lat_speed_mps)
@@ -85,17 +89,17 @@ def compute_collision(
 
     contact_offset_rel_center = B_CONTACT_FROM_TAIL - B_GEOM.tail_to_center
 
-    target_y = Y_A0 - A_GEOM.half_width
+    target_y = a_y0 - A_GEOM.half_width
     lateral_offset = sin_h * contact_offset_rel_center + cos_h * B_GEOM.half_width
 
-    t = (target_y - (Y_B0 + lateral_offset)) / b_lat_speed_mps
+    t = (target_y - (b_y0 + lateral_offset)) / b_lat_speed_mps
     if t <= 0:
         raise ValueError("由输入速度推导的碰撞时间 <= 0，检查参数是否正确。")
 
     x_a = X_A0 + v_a * t
-    y_a = Y_A0
+    y_a = a_y0
 
-    y_b = Y_B0 + b_lat_speed_mps * t
+    y_b = b_y0 + b_lat_speed_mps * t
 
     longitudinal_offset = cos_h * contact_offset_rel_center - sin_h * B_GEOM.half_width
 
@@ -111,7 +115,7 @@ def compute_collision(
     )
 
     x_b_start = x_b - v_b * t
-    y_b_start = Y_B0
+    y_b_start = b_y0
 
     return CollisionResult(
         time_to_collision=t,
@@ -133,12 +137,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--b-lat-speed-mps", type=float, required=True, help="B 车横向速度 (m/s)"
     )
+    parser.add_argument(
+        "--a-y0",
+        type=float,
+        default=DEFAULT_A_Y0,
+        help=f"A 车初始中心 Y 坐标，默认 {DEFAULT_A_Y0} m",
+    )
+    parser.add_argument(
+        "--b-y0",
+        type=float,
+        default=DEFAULT_B_Y0,
+        help=f"B 车初始中心 Y 坐标，默认 {DEFAULT_B_Y0} m",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    result = compute_collision(args.a_speed_kmh, args.b_long_speed_kmh, args.b_lat_speed_mps)
+    result = compute_collision(
+        args.a_speed_kmh,
+        args.b_long_speed_kmh,
+        args.b_lat_speed_mps,
+        a_y0=args.a_y0,
+        b_y0=args.b_y0,
+    )
 
     print(f"碰撞时间: {result.time_to_collision:.6f} s")
     print(f"B 车航向: {result.heading_deg:.6f} deg")
