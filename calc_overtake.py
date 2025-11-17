@@ -61,45 +61,54 @@ def kmh_to_mps(speed_kmh: float) -> float:
     return speed_kmh * MPS_PER_KMH
 
 
-def lateral_contact_time(b_lat_speed_mps: float) -> float:
+def resolve_heading(b_long_speed_kmh: float, b_lat_speed_mps: float) -> Tuple[float, float, float]:
     if b_lat_speed_mps <= 0:
         raise ValueError("B 车横向速度必须为正，且方向指向 A 车。")
 
-    lateral_gap = (Y_A0 - A_GEOM.half_width) - (Y_B0 + B_GEOM.half_width)
-    if lateral_gap <= 0:
-        raise ValueError("初始横向间距需大于 0，当前配置无解。")
-
-    return lateral_gap / b_lat_speed_mps
-
-
-def heading_deg(b_long_speed_kmh: float, b_lat_speed_mps: float) -> float:
-    vx = kmh_to_mps(b_long_speed_kmh)
-    if vx <= 0:
+    v_long = kmh_to_mps(b_long_speed_kmh)
+    if v_long <= 0:
         raise ValueError("B 车纵向速度必须大于 0。")
-    return math.degrees(math.atan2(b_lat_speed_mps, vx))
+
+    heading_rad = math.atan2(b_lat_speed_mps, v_long)
+    heading_deg = math.degrees(heading_rad)
+    return v_long, heading_rad, heading_deg
 
 
 def compute_collision(
     a_speed_kmh: float, b_long_speed_kmh: float, b_lat_speed_mps: float
 ) -> CollisionResult:
-    t = lateral_contact_time(b_lat_speed_mps)
-    heading = heading_deg(b_long_speed_kmh, b_lat_speed_mps)
-
     v_a = kmh_to_mps(a_speed_kmh)
-    v_b = kmh_to_mps(b_long_speed_kmh)
+    v_b, heading_rad, heading = resolve_heading(b_long_speed_kmh, b_lat_speed_mps)
+
+    sin_h = math.sin(heading_rad)
+    cos_h = math.cos(heading_rad)
+
+    contact_offset_rel_center = B_CONTACT_FROM_TAIL - B_GEOM.tail_to_center
+
+    target_y = Y_A0 - A_GEOM.half_width
+    lateral_offset = sin_h * contact_offset_rel_center + cos_h * B_GEOM.half_width
+
+    t = (target_y - (Y_B0 + lateral_offset)) / b_lat_speed_mps
+    if t <= 0:
+        raise ValueError("由输入速度推导的碰撞时间 <= 0，检查参数是否正确。")
 
     x_a = X_A0 + v_a * t
     y_a = Y_A0
 
-    contact_offset_rel_center = B_CONTACT_FROM_TAIL - B_GEOM.tail_to_center
-    center_offset = A_GEOM.head_to_center - contact_offset_rel_center
-
-    x_b = x_a + center_offset
     y_b = Y_B0 + b_lat_speed_mps * t
 
-    contact_x = x_b + contact_offset_rel_center
-    contact_y = y_b + B_GEOM.half_width
-    contact_from_tail = contact_x - (x_b - B_GEOM.tail_to_center)
+    longitudinal_offset = cos_h * contact_offset_rel_center - sin_h * B_GEOM.half_width
+
+    x_b = x_a + A_GEOM.head_to_center - longitudinal_offset
+
+    contact_x = x_b + longitudinal_offset
+    contact_y = y_b + lateral_offset
+
+    tail_x = x_b - B_GEOM.tail_to_center * cos_h
+    tail_y = y_b - B_GEOM.tail_to_center * sin_h
+    contact_from_tail = (
+        (contact_x - tail_x) * cos_h + (contact_y - tail_y) * sin_h
+    )
 
     x_b_start = x_b - v_b * t
     y_b_start = Y_B0
