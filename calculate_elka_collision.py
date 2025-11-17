@@ -12,6 +12,8 @@
 - 碰撞点：A车右上顶点 与 B车左侧边框距车尾1.25m处
 """
 
+import math
+
 def calculate_collision_coordinates():
     # 车辆参数
     # A车
@@ -161,6 +163,25 @@ def calculate_collision_coordinates():
     print(f"  B车纵向行驶：{distance_b_x:.4f} m")
     print(f"  B车横向行驶：{distance_b_y:.4f} m")
     
+    # 计算B车的heading角度
+    # B车的速度矢量：vx = 50 km/h (X方向), vy = 0.3 km/h (Y方向)
+    # heading角度 = arctan(vy/vx)，从X轴正方向逆时针旋转
+    heading_rad = math.atan2(car_b_vy, car_b_vx)
+    heading_deg = math.degrees(heading_rad)
+    
+    print("\n" + "=" * 60)
+    print("B车航向角（Heading）计算：")
+    print("=" * 60)
+    print(f"\nB车速度矢量：")
+    print(f"  纵向速度（X方向）：{car_b_vx:.2f} km/h")
+    print(f"  横向速度（Y方向）：{car_b_vy:.2f} km/h（向A车靠近）")
+    print(f"\nHeading角度计算：")
+    print(f"  heading = arctan(vy/vx) = arctan({car_b_vy}/{car_b_vx})")
+    print(f"  heading = {heading_rad:.8f} 弧度")
+    print(f"  heading = {heading_deg:.6f} 度")
+    print(f"\n说明：heading角度是从X轴正方向逆时针旋转的角度")
+    print(f"      正值表示车辆向Y正方向（左侧）偏转")
+    
     print("\n" + "=" * 60)
     print("最终答案：")
     print("=" * 60)
@@ -168,14 +189,18 @@ def calculate_collision_coordinates():
     print(f"   四舍五入到小数点后2位：({x_B0:.2f}, {car_b_initial_y:.2f}) m")
     print(f"\n2. 碰撞时B车中心点坐标：({x_B_center_at_collision:.4f}, {y_B_center_at_collision:.4f}) m")
     print(f"   四舍五入到小数点后2位：({x_B_center_at_collision:.2f}, {y_B_center_at_collision:.2f}) m")
-    print(f"\n3. 碰撞点坐标：({collision_x:.4f}, {collision_y:.4f}) m")
+    print(f"\n3. B车Heading角度：{heading_deg:.6f} 度（{heading_rad:.8f} 弧度）")
+    print(f"   四舍五入到小数点后4位：{heading_deg:.4f} 度")
+    print(f"\n4. 碰撞点坐标：({collision_x:.4f}, {collision_y:.4f}) m")
     print(f"   四舍五入到小数点后2位：({collision_x:.2f}, {collision_y:.2f}) m")
-    print(f"\n4. 碰撞时刻：{t_collision * 3600:.4f} 秒（{t_collision:.8f} 小时）")
+    print(f"\n5. 碰撞时刻：{t_collision * 3600:.4f} 秒（{t_collision:.8f} 小时）")
     print("\n" + "=" * 60)
     
     return {
         'b_initial_center': (x_B0, car_b_initial_y),
         'b_collision_center': (x_B_center_at_collision, y_B_center_at_collision),
+        'b_heading_deg': heading_deg,
+        'b_heading_rad': heading_rad,
         'collision_point': (collision_x, collision_y),
         'collision_time_hours': t_collision,
         'collision_time_seconds': t_collision * 3600
