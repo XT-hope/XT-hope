@@ -164,8 +164,7 @@ def parse_signal_ref(text: str) -> Tuple[SignalRef, Optional[str]]:
 class SetStep:
     sid: str  # "S1"
     raw: str
-    target: SignalRef
-    value: Any
+    assignments: List[Tuple[SignalRef, Any]]  # 按出现顺序执行
     wait_s: Optional[float]
     keep_dynamic_false: bool
     then_checks: List[str]  # ["C1", "C2", ...]
@@ -206,7 +205,8 @@ def _extract_option(pattern: re.Pattern[str], text: str) -> Tuple[Optional[str],
 
 
 _SET_WAIT_OPT_RE = re.compile(r"\bwait\s+([0-9]+(?:\.[0-9]+)?\s*(?:ms|s))\b", re.IGNORECASE)
-_SET_KEEP_DYNAMIC_RE = re.compile(r"\bkeep_dynamic\s+(true|false)\b", re.IGNORECASE)
+# 同时兼容：keep_dynamic false / keepDynamic false / keepdynamic false
+_SET_KEEP_DYNAMIC_RE = re.compile(r"\bkeep(?:_)?dynamic\s+(true|false)\b", re.IGNORECASE)
 _SET_THEN_CHECK_RE = re.compile(r"\bthen\s+CHECK\s+(.+)$", re.IGNORECASE)
 
 _CHECK_TIMEOUT_RE = re.compile(
@@ -250,13 +250,22 @@ def parse_set_step(sid: str, content: str) -> SetStep:
     wait_token, rest = _extract_option(_SET_WAIT_OPT_RE, rest)
     wait_s = parse_time_to_seconds(wait_token) if wait_token else None
 
-    target, value_str = parse_signal_ref(rest)
-    value = parse_value(value_str) if value_str is not None else 1
+    # 支持：set A=1 && B=2 && sys::X::Y=0x1
+    # 注意：&& 两侧可能有空格
+    parts = [p.strip() for p in re.split(r"\s*&&\s*", rest) if p.strip()]
+    if not parts:
+        raise DslParseError(f"{sid}: set 内容为空: {raw!r}")
+
+    assignments: List[Tuple[SignalRef, Any]] = []
+    for part in parts:
+        target, value_str = parse_signal_ref(part)
+        value = parse_value(value_str) if value_str is not None else 1
+        assignments.append((target, value))
+
     return SetStep(
         sid=sid.upper(),
         raw=raw,
-        target=target,
-        value=value,
+        assignments=assignments,
         wait_s=wait_s,
         keep_dynamic_false=keep_dynamic_false,
         then_checks=then_checks,
@@ -464,15 +473,21 @@ def convert_case_to_python(case: CaseDsl) -> Tuple[List[str], List[Dict[str, Any
                 {"action": "SetSysVar", "namespace": "simulink", "var_name": "dynamic_disconnect", "value": 1}
             )
 
-        if s.target.kind == "env":
-            _append_mapping(url_mapping, seen, s.target.name)
-            steps.append({"action": "SetSignal", "signal": s.target.name, "value": s.value})
-        elif s.target.kind == "sys":
-            steps.append(
-                {"action": "SetSysVar", "namespace": s.target.namespace or "", "var_name": s.target.name, "value": s.value}
-            )
-        else:
-            raise DslParseError(f"{s.sid}: set 目标不支持的 kind: {s.target.kind!r}")
+        for target, value in s.assignments:
+            if target.kind == "env":
+                _append_mapping(url_mapping, seen, target.name)
+                steps.append({"action": "SetSignal", "signal": target.name, "value": value})
+            elif target.kind == "sys":
+                steps.append(
+                    {
+                        "action": "SetSysVar",
+                        "namespace": target.namespace or "",
+                        "var_name": target.name,
+                        "value": value,
+                    }
+                )
+            else:
+                raise DslParseError(f"{s.sid}: set 目标不支持的 kind: {target.kind!r}")
 
         if s.wait_s is not None:
             steps.append({"action": "Wait", "wait_time": s.wait_s})
