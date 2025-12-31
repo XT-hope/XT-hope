@@ -11,7 +11,11 @@ This project converts ego-centric BEV lane perception and GPS trajectory data in
 - At intersections, lane lines may be missing; the ego trajectory continues through the gap until lanes reappear.
 
 ## Install
-No external dependencies; uses Python 3 standard library.
+本仓库主要功能（XODR 转换）不依赖第三方库；如果你要使用 DBC->CANoe 系统变量 XML 生成功能，需要安装 `cantools`：
+
+```bash
+python3 -m pip install -r requirements.txt
+```
 
 ## Run
 ```bash
@@ -20,6 +24,25 @@ python3 -m xodr_converter.cli \
   --bev /workspace/data/example/bev.json \
   --out /workspace/out/example.xodr
 ```
+
+## DBC -> CANoe 系统变量 XML
+
+脚本：`dbc_to_canoe_sysvars.py`
+
+### 示例（使用仓库内置的最小 DBC）
+
+```bash
+python3 /workspace/dbc_to_canoe_sysvars.py \
+  --dbc /workspace/data/example/example.dbc \
+  --out /workspace/out/example.vsysvar \
+  --root-namespace DBC
+```
+
+### 常用参数
+
+- `--format vector-vsysvar|generic`: 默认 `vector-vsysvar`，若你的 CANoe 导入对 schema 更严格可先试 `generic`
+- `--name-pattern "{signal}"`：变量名模式，支持 `{message}` `{signal}` `{frame_id}`
+- `--no-group-by-message`：不按 message 分组（否则默认层级为 `DBC/<Message>/<Signal>`）
 
 ## Outputs
 - An XODR file with a single road composed of lane sections, lane markings, zebra objects, and inferred traffic lights near stops.
