@@ -127,3 +127,6 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# DSL test case editor data
+dsl_test_case_editor_data/

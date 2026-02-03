@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DSL Test Case Editor</title>
+    <link rel="stylesheet" href="/static/css/style.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>DSL Test Case Editor</h1>
+    </header>
+    <main class="app-layout">
+      <section class="panel">
+        <h2>Project</h2>
+        <div class="form-row">
+          <label for="project-name">Name</label>
+          <input id="project-name" type="text" placeholder="Project name" />
+        </div>
+        <div class="form-row">
+          <label for="project-desc">Description</label>
+          <input id="project-desc" type="text" placeholder="Optional description" />
+        </div>
+        <button id="create-project">Create Project</button>
+        <div class="divider"></div>
+        <div class="form-row">
+          <label for="project-select">Open</label>
+          <select id="project-select"></select>
+        </div>
+        <button id="open-project">Open Project</button>
+        <div class="info">
+          <span>Current Project:</span>
+          <strong id="current-project">None</strong>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Uploads</h2>
+        <div class="form-row">
+          <label for="upload-type">File Type</label>
+          <select id="upload-type">
+            <option value="vehicle_dbc">Vehicle DBC</option>
+            <option value="env_dbc">Environment DBC</option>
+            <option value="system_variable">System Variables</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="upload-file">File</label>
+          <input id="upload-file" type="file" />
+        </div>
+        <button id="upload-file-btn">Upload</button>
+        <div class="info" id="upload-status"></div>
+        <button id="convert-env-dbc">Convert to Env DBC (stub)</button>
+        <div class="info" id="convert-status"></div>
+      </section>
+
+      <section class="panel">
+        <h2>DBC Mapping</h2>
+        <table class="mapping-table">
+          <thead>
+            <tr>
+              <th>DBC File</th>
+              <th>Type</th>
+              <th>CAN Channel</th>
+            </tr>
+          </thead>
+          <tbody id="mapping-body"></tbody>
+        </table>
+        <button id="save-mapping">Save Mapping</button>
+        <div class="info" id="mapping-status"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Cases</h2>
+        <div class="form-row">
+          <label for="case-select">Existing</label>
+          <select id="case-select"></select>
+        </div>
+        <button id="load-case">Load Case</button>
+        <div class="form-row">
+          <label for="case-name">Save As</label>
+          <input id="case-name" type="text" placeholder="case_name.dsl" />
+        </div>
+        <div class="form-row">
+          <label for="save-oss">
+            <input id="save-oss" type="checkbox" />
+            Save to OSS (stub)
+          </label>
+        </div>
+        <button id="save-case">Save Case</button>
+        <div class="info" id="case-status"></div>
+      </section>
+
+      <section class="panel wide">
+        <h2>DSL Editor</h2>
+        <textarea id="dsl-editor" placeholder="Write DSL case here..."></textarea>
+        <div class="actions">
+          <button id="insert-template">Insert Template</button>
+          <button id="validate-case">Validate</button>
+        </div>
+        <div class="diagnostics" id="diagnostics"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Suggestions</h2>
+        <div class="form-row">
+          <label for="suggestion-type">Type</label>
+          <select id="suggestion-type">
+            <option value="sig">sig::</option>
+            <option value="env">env::</option>
+            <option value="sys">sys::</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="suggestion-query">Query</label>
+          <input id="suggestion-query" type="text" placeholder="Filter prefix" />
+        </div>
+        <button id="search-suggestions">Search</button>
+        <ul id="suggestion-list"></ul>
+      </section>
+
+      <section class="panel">
+        <h2>AI Assistant</h2>
+        <div class="form-row">
+          <label for="ai-question">Question</label>
+          <textarea id="ai-question" placeholder="Ask about signals or variables"></textarea>
+        </div>
+        <div class="form-row">
+          <label for="ai-context">Context</label>
+          <textarea id="ai-context" placeholder="Optional context"></textarea>
+        </div>
+        <button id="ask-ai">Ask AI</button>
+        <div class="info" id="ai-answer"></div>
+      </section>
+    </main>
+
+    <script src="/static/js/app.js"></script>
+  </body>
+</html>
