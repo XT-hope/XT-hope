@@ -6,9 +6,10 @@
 
 1. **无边框悬浮窗口** - 使用 `Qt::FramelessWindowHint` 实现
 2. **始终置顶** - 使用 `Qt::WindowStaysOnTopHint` 保持窗口在最上层
-3. **鼠标拖动** - 实现 `mousePressEvent`、`mouseMoveEvent`、`mouseReleaseEvent`
-4. **美观的 UI** - 圆形按钮、渐变色、阴影效果
-5. **两种版本** - 简单版和带展开菜单的高级版
+3. **鼠标拖动** - 通过自定义 `DraggableButton` 类实现按钮拖动
+4. **智能识别** - 自动区分点击和拖动操作（移动超过5像素才算拖动）
+5. **美观的 UI** - 圆形按钮、渐变色、阴影效果
+6. **两种版本** - 简单版和带展开菜单的高级版
 
 ## 实现方式
 
@@ -40,27 +41,74 @@ self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
 #### 2. 鼠标拖动实现
 
+由于按钮会拦截鼠标事件，我们创建了 `DraggableButton` 类在按钮内部处理拖动：
+
+```python
+# Python 版本
+class DraggableButton(QPushButton):
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.dragging = True
+            self.click_position = event.pos()
+            self.drag_position = event.globalPosition().toPoint() - self.window().pos()
+            self.moved = False
+            
+    def mouseMoveEvent(self, event):
+        if self.dragging:
+            # 移动超过5像素才算拖动
+            move_distance = (event.pos() - self.click_position).manhattanLength()
+            if move_distance > 5:
+                self.moved = True
+                new_pos = event.globalPosition().toPoint() - self.drag_position
+                self.window().move(new_pos)
+                
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.dragging = False
+            # 只有在没有拖动时才触发点击事件
+            if not self.moved:
+                super().mouseReleaseEvent(event)
+```
+
 ```cpp
 // C++ 版本
-void mousePressEvent(QMouseEvent *event) override {
-    if (event->button() == Qt::LeftButton) {
-        dragging = true;
-        dragPosition = event->pos();
+class DraggableButton : public QPushButton {
+protected:
+    void mousePressEvent(QMouseEvent *event) override {
+        if (event->button() == Qt::LeftButton) {
+            dragging = true;
+            clickPosition = event->pos();
+            dragPosition = event->globalPosition().toPoint() - window()->pos();
+            moved = false;
+        }
     }
-}
-
-void mouseMoveEvent(QMouseEvent *event) override {
-    if (dragging) {
-        move(event->globalPosition().toPoint() - dragPosition);
+    
+    void mouseMoveEvent(QMouseEvent *event) override {
+        if (dragging) {
+            int moveDistance = (event->pos() - clickPosition).manhattanLength();
+            if (moveDistance > 5) {
+                moved = true;
+                window()->move(event->globalPosition().toPoint() - dragPosition);
+            }
+        }
     }
-}
-
-void mouseReleaseEvent(QMouseEvent *event) override {
-    if (event->button() == Qt::LeftButton) {
-        dragging = false;
+    
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        if (event->button() == Qt::LeftButton) {
+            dragging = false;
+            if (!moved) {
+                QPushButton::mouseReleaseEvent(event);
+            }
+        }
     }
-}
+};
 ```
+
+**关键点：**
+- 在按钮类内部处理拖动，而不是在窗口类中
+- 通过移动距离判断是点击还是拖动（防止误触发）
+- 使用 `window()->move()` 移动整个窗口
+- 只有未发生拖动时才触发按钮点击事件
 
 #### 3. 圆形渐变按钮样式
 
