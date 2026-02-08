@@ -14,13 +14,51 @@ from PyQt6.QtGui import QIcon, QPalette, QColor
 import sys
 
 
+class DraggableButton(QPushButton):
+    """可拖动的按钮类"""
+    
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self.dragging = False
+        self.drag_position = QPoint()
+        self.click_position = QPoint()
+        self.moved = False  # 标记是否发生了移动
+        
+    def mousePressEvent(self, event):
+        """鼠标按下事件"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.dragging = True
+            self.click_position = event.pos()
+            self.drag_position = event.globalPosition().toPoint() - self.window().pos()
+            self.moved = False
+            event.accept()
+            
+    def mouseMoveEvent(self, event):
+        """鼠标移动事件"""
+        if self.dragging:
+            # 计算移动距离，判断是否真的在拖动
+            move_distance = (event.pos() - self.click_position).manhattanLength()
+            if move_distance > 5:  # 移动超过5像素才算拖动
+                self.moved = True
+                new_pos = event.globalPosition().toPoint() - self.drag_position
+                self.window().move(new_pos)
+            event.accept()
+            
+    def mouseReleaseEvent(self, event):
+        """鼠标释放事件"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.dragging = False
+            # 只有在没有发生拖动时才触发点击事件
+            if not self.moved:
+                super().mouseReleaseEvent(event)
+            event.accept()
+
+
 class FloatingButton(QWidget):
     """悬浮可移动按钮"""
     
     def __init__(self):
         super().__init__()
-        self.dragging = False
-        self.offset = QPoint()
         self.init_ui()
         
     def init_ui(self):
@@ -38,8 +76,8 @@ class FloatingButton(QWidget):
         # 设置窗口透明背景
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
-        # 创建主按钮
-        self.main_button = QPushButton('AI')
+        # 创建主按钮 - 使用可拖动按钮
+        self.main_button = DraggableButton('AI')
         self.main_button.setFixedSize(60, 60)
         self.main_button.clicked.connect(self.show_ai_dialog)
         
@@ -76,24 +114,6 @@ class FloatingButton(QWidget):
         # 设置初始位置（屏幕右下角）
         screen = QApplication.primaryScreen().geometry()
         self.move(screen.width() - 100, screen.height() - 150)
-        
-    def mousePressEvent(self, event):
-        """鼠标按下事件 - 开始拖动"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.dragging = True
-            self.offset = event.pos()
-            
-    def mouseMoveEvent(self, event):
-        """鼠标移动事件 - 拖动窗口"""
-        if self.dragging:
-            # 计算新位置
-            new_pos = event.globalPosition().toPoint() - self.offset
-            self.move(new_pos)
-            
-    def mouseReleaseEvent(self, event):
-        """鼠标释放事件 - 结束拖动"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.dragging = False
             
     def show_ai_dialog(self):
         """显示 AI 提示对话框"""
@@ -217,8 +237,6 @@ class AdvancedFloatingButton(QWidget):
     
     def __init__(self):
         super().__init__()
-        self.dragging = False
-        self.offset = QPoint()
         self.expanded = False
         self.init_ui()
         
@@ -237,14 +255,14 @@ class AdvancedFloatingButton(QWidget):
         self.layout.setSpacing(10)
         self.layout.setContentsMargins(5, 5, 5, 5)
         
-        # 主按钮
-        self.main_button = QPushButton('AI')
+        # 主按钮 - 使用可拖动按钮
+        self.main_button = DraggableButton('AI')
         self.main_button.setFixedSize(60, 60)
         self.main_button.clicked.connect(self.toggle_menu)
         self.main_button.setStyleSheet(self.get_button_style('#667eea', '#764ba2'))
         self.layout.addWidget(self.main_button)
         
-        # 功能按钮（初始隐藏）
+        # 功能按钮（初始隐藏）- 使用可拖动按钮
         self.chat_button = self.create_menu_button('对话', '#f093fb', '#f5576c')
         self.code_button = self.create_menu_button('代码', '#4facfe', '#00f2fe')
         self.help_button = self.create_menu_button('帮助', '#43e97b', '#38f9d7')
@@ -263,7 +281,7 @@ class AdvancedFloatingButton(QWidget):
         
     def create_menu_button(self, text, color1, color2):
         """创建菜单按钮"""
-        button = QPushButton(text)
+        button = DraggableButton(text)
         button.setFixedSize(60, 60)
         button.setStyleSheet(self.get_button_style(color1, color2))
         button.hide()  # 初始隐藏
@@ -303,23 +321,6 @@ class AdvancedFloatingButton(QWidget):
             self.help_button.show()
             self.resize(70, 280)
         self.expanded = not self.expanded
-        
-    def mousePressEvent(self, event):
-        """鼠标按下事件"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.dragging = True
-            self.offset = event.pos()
-            
-    def mouseMoveEvent(self, event):
-        """鼠标移动事件"""
-        if self.dragging:
-            new_pos = event.globalPosition().toPoint() - self.offset
-            self.move(new_pos)
-            
-    def mouseReleaseEvent(self, event):
-        """鼠标释放事件"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.dragging = False
             
     def show_ai_dialog(self, mode):
         """显示 AI 对话框"""

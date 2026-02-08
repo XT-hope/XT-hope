@@ -22,6 +22,63 @@
 #include <QTextEdit>
 #include <QMouseEvent>
 #include <QScreen>
+#include <QDebug>
+
+// 可拖动的按钮类
+class DraggableButton : public QPushButton
+{
+    Q_OBJECT
+
+public:
+    explicit DraggableButton(const QString &text, QWidget *parent = nullptr)
+        : QPushButton(text, parent), dragging(false), moved(false)
+    {
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton) {
+            dragging = true;
+            clickPosition = event->pos();
+            dragPosition = event->globalPosition().toPoint() - window()->pos();
+            moved = false;
+            event->accept();
+        }
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (dragging) {
+            // 计算移动距离，判断是否真的在拖动
+            int moveDistance = (event->pos() - clickPosition).manhattanLength();
+            if (moveDistance > 5) {  // 移动超过5像素才算拖动
+                moved = true;
+                QPoint newPos = event->globalPosition().toPoint() - dragPosition;
+                window()->move(newPos);
+            }
+            event->accept();
+        }
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton) {
+            dragging = false;
+            // 只有在没有发生拖动时才触发点击事件
+            if (!moved) {
+                QPushButton::mouseReleaseEvent(event);
+            }
+            event->accept();
+        }
+    }
+
+private:
+    bool dragging;
+    bool moved;
+    QPoint clickPosition;
+    QPoint dragPosition;
+};
 
 // AI 提示对话框类
 class AIPromptDialog : public QDialog
@@ -138,15 +195,15 @@ class FloatingButton : public QWidget
     Q_OBJECT
 
 public:
-    explicit FloatingButton(QWidget *parent = nullptr) : QWidget(parent), dragging(false)
+    explicit FloatingButton(QWidget *parent = nullptr) : QWidget(parent)
     {
         // 设置窗口属性：无边框、置顶、工具窗口
         setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Tool);
         // 设置透明背景
         setAttribute(Qt::WA_TranslucentBackground);
         
-        // 创建主按钮
-        mainButton = new QPushButton("AI", this);
+        // 创建主按钮 - 使用可拖动按钮
+        mainButton = new DraggableButton("AI", this);
         mainButton->setFixedSize(60, 60);
         
         // 设置按钮样式 - 圆形渐变效果
@@ -186,33 +243,6 @@ public:
         move(screenGeometry.width() - 100, screenGeometry.height() - 150);
     }
 
-protected:
-    // 鼠标按下事件
-    void mousePressEvent(QMouseEvent *event) override
-    {
-        if (event->button() == Qt::LeftButton) {
-            dragging = true;
-            dragPosition = event->pos();
-        }
-    }
-    
-    // 鼠标移动事件
-    void mouseMoveEvent(QMouseEvent *event) override
-    {
-        if (dragging) {
-            // 计算新位置并移动窗口
-            move(event->globalPosition().toPoint() - dragPosition);
-        }
-    }
-    
-    // 鼠标释放事件
-    void mouseReleaseEvent(QMouseEvent *event) override
-    {
-        if (event->button() == Qt::LeftButton) {
-            dragging = false;
-        }
-    }
-
 private slots:
     void showAIDialog()
     {
@@ -221,9 +251,7 @@ private slots:
     }
 
 private:
-    QPushButton *mainButton;
-    bool dragging;
-    QPoint dragPosition;
+    DraggableButton *mainButton;
 };
 
 // 主函数
