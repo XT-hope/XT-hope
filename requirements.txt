@@ -1,1 +1,17 @@
+# PyQt6流程图项目依赖
 
+# 方案1：PyQt6原生（必需）
+PyQt6>=6.4.0
+
+# 方案2：Graphviz集成（可选）
+# 需要先安装系统Graphviz: sudo apt install graphviz
+graphviz>=0.20
+
+# 方案3：PyQtGraph（可选）
+pyqtgraph>=0.13.0
+
+# 注意：
+# - 所有方案的基础都需要PyQt6
+# - 方案1只需要PyQt6
+# - 方案2需要graphviz库和系统Graphviz
+# - 方案3需要pyqtgraph
