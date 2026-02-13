@@ -711,10 +711,12 @@ class SetSignalRow(QWidget):
         completions_by_kind: Dict[str, List[str]],
         hier_index_by_kind: Dict[str, Dict[Tuple[str, ...], List[str]]],
         parent=None,
+        dbc_parser=None,
     ):
         super().__init__(parent)
         self._completions_by_kind = completions_by_kind
         self._hier_index_by_kind = hier_index_by_kind
+        self._dbc_parser = dbc_parser
         self._build_ui()
  
     def _build_ui(self) -> None:
@@ -788,12 +790,21 @@ class SetSignalRow(QWidget):
         _set_uniform_height(self.kind_combo, self.name_edit, self.value_edit, btn_del)
  
         # 逐级补全（只对 name_edit）
-        self._hier = _HierLineEditCompleter(
-            edit=self.name_edit,
-            kind_getter=lambda: self.kind_combo.currentText(),
-            index_by_kind=self._hier_index_by_kind,
-            allowed_kinds=["env", "sys"],
-        )
+        try:
+            self._hier = _HierLineEditCompleter(
+                edit=self.name_edit,
+                kind_getter=lambda: self.kind_combo.currentText(),
+                index_by_kind=self._hier_index_by_kind,
+                allowed_kinds=["env", "sys"],
+                dbc_parser=self._dbc_parser,
+            )
+        except TypeError:
+            self._hier = _HierLineEditCompleter(
+                edit=self.name_edit,
+                kind_getter=lambda: self.kind_combo.currentText(),
+                index_by_kind=self._hier_index_by_kind,
+                allowed_kinds=["env", "sys"],
+            )
         self.kind_combo.currentTextChanged.connect(lambda _k: self._hier.refresh())
  
     def set_data(self, s: SetSignalModel) -> None:
@@ -826,6 +837,7 @@ class SetStepDialog(QDialog):
         completions_by_kind: Dict[str, List[str]],
         available_check_ids: List[str],
         parent=None,
+        dbc_parser=None,
     ):
         super().__init__(parent)
         self.setWindowTitle("编辑 SET Step")
@@ -835,6 +847,7 @@ class SetStepDialog(QDialog):
         self._completions_by_kind = completions_by_kind
         self._hier_index_by_kind = _build_hier_index_by_kind(self._completions_by_kind)
         self._available_check_ids = available_check_ids
+        self._dbc_parser = dbc_parser
 
         self._model = SetStepModel(signals=[SetSignalModel(kind="sys", name="", value="")], wait_ms=0, next_checks=[])
         self._parsed_ok = False
@@ -938,7 +951,12 @@ class SetStepDialog(QDialog):
                 w.deleteLater()
 
     def _add_row(self, data: Optional[SetSignalModel] = None) -> None:
-        row = SetSignalRow(self._completions_by_kind, self._hier_index_by_kind, self.sig_container)
+        row = SetSignalRow(
+            self._completions_by_kind,
+            self._hier_index_by_kind,
+            parent=self.sig_container,
+            dbc_parser=self._dbc_parser,
+        )
         row.removed.connect(self._remove_row)
     
         if isinstance(data, SetSignalModel):
@@ -1046,10 +1064,12 @@ class CheckItemRow(QWidget):
         completions_by_kind: Dict[str, List[str]],
         hier_index_by_kind: Dict[str, Dict[Tuple[str, ...], List[str]]],
         parent=None,
+        dbc_parser=None,
     ):
         super().__init__(parent)
         self._completions_by_kind = completions_by_kind
         self._hier_index_by_kind = hier_index_by_kind
+        self._dbc_parser = dbc_parser
         self._build_ui()
  
     def _build_ui(self) -> None:
@@ -1240,12 +1260,21 @@ class CheckItemRow(QWidget):
         root.addWidget(row3)
  
         # 逐级补全（只对 name_edit）
-        self._hier = _HierLineEditCompleter(
-            edit=self.name_edit,
-            kind_getter=lambda: self.kind_combo.currentText(),
-            index_by_kind=self._hier_index_by_kind,
-            allowed_kinds=["sig", "env", "sys"],
-        )
+        try:
+            self._hier = _HierLineEditCompleter(
+                edit=self.name_edit,
+                kind_getter=lambda: self.kind_combo.currentText(),
+                index_by_kind=self._hier_index_by_kind,
+                allowed_kinds=["sig", "env", "sys"],
+                dbc_parser=self._dbc_parser,
+            )
+        except TypeError:
+            self._hier = _HierLineEditCompleter(
+                edit=self.name_edit,
+                kind_getter=lambda: self.kind_combo.currentText(),
+                index_by_kind=self._hier_index_by_kind,
+                allowed_kinds=["sig", "env", "sys"],
+            )
         self.kind_combo.currentTextChanged.connect(lambda _k: self._hier.refresh())
  
         # mode/async 联动
@@ -1329,7 +1358,7 @@ class CheckItemRow(QWidget):
         )
 
 class CheckStepDialog(QDialog):
-    def __init__(self, raw_text: str, completions_by_kind: Dict[str, List[str]], parent=None):
+    def __init__(self, raw_text: str, completions_by_kind: Dict[str, List[str]], parent=None, dbc_parser=None):
         super().__init__(parent)
         self.setWindowTitle("编辑 CHECK Step")
         self.resize(980, 650)
@@ -1337,6 +1366,7 @@ class CheckStepDialog(QDialog):
         self._raw_text = raw_text or ""
         self._completions_by_kind = completions_by_kind
         self._hier_index_by_kind = _build_hier_index_by_kind(self._completions_by_kind)
+        self._dbc_parser = dbc_parser
 
         self._model = CheckStepModel(items=[CheckItemModel(kind="sig", name="", mode="single")])
         self._parsed_ok = False
@@ -1403,7 +1433,12 @@ class CheckStepDialog(QDialog):
                 w.deleteLater()
 
     def _add_row(self, data: Optional[CheckItemModel] = None) -> None:
-        row = CheckItemRow(self._completions_by_kind, self._hier_index_by_kind, self.items_container)
+        row = CheckItemRow(
+            self._completions_by_kind,
+            self._hier_index_by_kind,
+            parent=self.items_container,
+            dbc_parser=self._dbc_parser,
+        )
         row.removed.connect(self._remove_row)
     
         if isinstance(data, CheckItemModel):
