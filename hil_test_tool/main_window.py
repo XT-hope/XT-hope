@@ -1013,7 +1013,7 @@ class MainWindow(QMainWindow):
             item_data = item.data(0, Qt.ItemDataRole.UserRole)
             if item_data and item_data.get("type") == "automation_file":
                 if item_data.get("path", "") == file_path:
-                    self.project_tree.setCurrentItem(item, 0, QItemSelectionModel.SelectionFlag.Current)
+                    self.project_tree.setCurrentItem(item)
                     self.project_tree.scrollToItem(item)
                     return True
             elif item_data and item_data.get("type") == "automation_directory":
@@ -1043,7 +1043,7 @@ class MainWindow(QMainWindow):
             item_data = item.data(0, Qt.ItemDataRole.UserRole)
             if item_data and item_data.get("type") == "automation_directory":
                 if item_data.get("path", "") == dir_path:
-                    self.project_tree.setCurrentItem(item, 0, QItemSelectionModel.SelectionFlag.Current)
+                    self.project_tree.setCurrentItem(item)
                     self.project_tree.scrollToItem(item)
                     return True
                 if self._find_and_highlight_automation_dir_node(item, dir_path):
@@ -1077,7 +1077,7 @@ class MainWindow(QMainWindow):
                     item_parent = PurePosixPath(file_path).parent
                     item_directory = str(item_parent) if str(item_parent) != "." else ""
                     if item_case_name == case_name and item_directory == directory:
-                        self.project_tree.setCurrentItem(item, 0, QItemSelectionModel.SelectionFlag.Current)
+                        self.project_tree.setCurrentItem(item)
                         self.project_tree.scrollToItem(item)
                         return True
             elif item_data and item_data.get("type") == "directory":
@@ -1105,7 +1105,7 @@ class MainWindow(QMainWindow):
             item_data = item.data(0, Qt.ItemDataRole.UserRole)
             if item_data and item_data.get("type") == "directory":
                 if item_data.get("path", "") == target_path:
-                    self.project_tree.setCurrentItem(item, 0, QItemSelectionModel.SelectionFlag.Current)
+                    self.project_tree.setCurrentItem(item)
                     self.project_tree.scrollToItem(item)
                     return True
                 if self._find_and_highlight_directory_node(item, directory_name, parent_directory):
