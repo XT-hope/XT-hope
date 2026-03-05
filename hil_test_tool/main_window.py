@@ -743,14 +743,16 @@ class MainWindow(QMainWindow):
 
     # ==================== 项目树 ====================
 
-    def update_project_tree(self) -> None:
-        """更新项目树"""
+    def update_project_tree(self, *, restore_selection: bool = True) -> None:
+        """更新项目树，restore_selection=False 时不恢复之前的选中状态"""
         saved_expanded = self._save_expanded_state()
         saved_current_data = None
-        current_item = self.project_tree.currentItem()
-        if current_item:
-            saved_current_data = current_item.data(0, Qt.ItemDataRole.UserRole)
-        saved_selections = self._save_selected_items()
+        saved_selections: List[Dict[str, Any]] = []
+        if restore_selection:
+            current_item = self.project_tree.currentItem()
+            if current_item:
+                saved_current_data = current_item.data(0, Qt.ItemDataRole.UserRole)
+            saved_selections = self._save_selected_items()
 
         self.project_tree.clear()
 
@@ -1571,7 +1573,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", f"创建文件 '{file_name}.dsl' 失败")
             return
 
-        self.update_project_tree()
+        self.update_project_tree(restore_selection=False)
         self.open_case_modular_editor_with_directory(file_name, directory)
         self.update_status(f"新建Case '{file_name}.dsl'" + (f"（目录: {directory}）" if directory else ""))
 
@@ -1592,7 +1594,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", f"创建文件 '{file_name}.dsl' 失败")
             return
 
-        self.update_project_tree()
+        self.update_project_tree(restore_selection=False)
         self.open_case_modular_editor_with_directory(file_name, directory)
         self.update_status(f"在目录 '{directory}' 中新建Case '{file_name}.dsl'")
 
@@ -1889,7 +1891,7 @@ class MainWindow(QMainWindow):
             "directory": target_directory, "created_time": datetime.now().isoformat()
         })
         self.project_manager.save_project()
-        self.update_project_tree()
+        self.update_project_tree(restore_selection=False)
         self.open_case_modular_editor_with_directory(new_name, target_directory)
 
     def _paste_single_directory(self, source_directory: str, dir_name: str, target_directory: str) -> None:
@@ -1918,7 +1920,7 @@ class MainWindow(QMainWindow):
         new_directory = f"{target_directory}/{new_dir_name}" if target_directory else new_dir_name
         self._add_directory_to_config(new_directory, new_target_dir)
         self.project_manager.save_project()
-        self.update_project_tree()
+        self.update_project_tree(restore_selection=False)
         QTimer.singleShot(50, lambda: self._highlight_directory_node(new_dir_name, target_directory))
         QTimer.singleShot(50, lambda: self.project_tree.setFocus())
         self.update_status(f"目录 '{new_dir_name}' 已粘贴")
@@ -3225,7 +3227,7 @@ class MainWindow(QMainWindow):
                 new_dir_path = f"{target_dir}/{new_dir_name}" if target_dir else new_dir_name
 
             self.project_manager.sync_automation_cases()
-            self.update_project_tree()
+            self.update_project_tree(restore_selection=False)
             if new_file_path:
                 QTimer.singleShot(50, lambda: self._highlight_automation_node(new_file_path, case_type))
             elif new_dir_path:
