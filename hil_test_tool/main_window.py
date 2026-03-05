@@ -46,11 +46,17 @@ class ProjectTreeWidget(QTreeWidget):
         self.copy_shortcut = None
         self.paste_shortcut = None
         self._last_click_modifiers = Qt.KeyboardModifier(0)
+        self._mouse_pressed = False
+
+    def mousePressEvent(self, event):
+        """捕获鼠标按下时的修饰键状态（比 Release 更可靠，意图明确）"""
+        self._last_click_modifiers = event.modifiers()
+        self._mouse_pressed = True
+        super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
-        """捕获鼠标释放时的修饰键状态，供 itemClicked 处理器使用"""
-        self._last_click_modifiers = event.modifiers()
         super().mouseReleaseEvent(event)
+        self._mouse_pressed = False
 
     def set_main_window(self, main_window):
         """设置主窗口引用"""
@@ -683,7 +689,10 @@ class MainWindow(QMainWindow):
             self._refresh_timer.start(300)
 
     def _do_refresh_project_tree(self) -> None:
-        """执行项目树刷新"""
+        """执行项目树刷新，鼠标交互期间延迟执行避免破坏点击事件"""
+        if self.project_tree._mouse_pressed:
+            self._refresh_timer.start(200)
+            return
         if self.project_manager.is_project_open():
             self._cleanup_missing_file_references()
             self.update_project_tree()
