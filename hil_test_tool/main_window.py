@@ -1160,8 +1160,12 @@ class MainWindow(QMainWindow):
         """单击定时器到期，确认为单击而非双击，执行展开/折叠"""
         item = self._pending_expand_item
         self._pending_expand_item = None
-        if item:
+        if item is None:
+            return
+        try:
             item.setExpanded(not item.isExpanded())
+        except RuntimeError:
+            pass
 
     def on_tree_item_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
         """项目树项双击事件 - 打开文件编辑器"""
