@@ -1000,6 +1000,12 @@ class MainWindow(QMainWindow):
                 self._highlight_automation_node(parts[2], parts[1])
             return
 
+        if file_key.startswith("viewer:"):
+            parts = file_key.split(":", 2)
+            if len(parts) >= 3:
+                self._highlight_viewer_node(parts[2], parts[1])
+            return
+
         if "/" in file_key:
             parts = file_key.split("/")
             case_name = parts[-1]
@@ -1068,6 +1074,33 @@ class MainWindow(QMainWindow):
                 if self._find_and_highlight_automation_dir_node(item, dir_path):
                     return True
         return False
+
+    def _highlight_viewer_node(self, file_name: str, file_type: str) -> None:
+        """在项目树中高亮对应的 CANoe/Simulink 等查看器节点"""
+        _TYPE_TO_PARENT = {
+            "CANoe/dbc_file": "DBC文件",
+            "CANoe/env_dbc": "环境变量DBC文件",
+            "CANoe/system_variable": "系统变量文件",
+        }
+        parent_text = _TYPE_TO_PARENT.get(file_type)
+        if not parent_text:
+            return
+        root = self.project_tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            project_item = root.child(i)
+            for j in range(project_item.childCount()):
+                section = project_item.child(j)
+                if section.text(0) == "CANoe":
+                    for k in range(section.childCount()):
+                        category = section.child(k)
+                        if category.text(0) == parent_text:
+                            for m in range(category.childCount()):
+                                child = category.child(m)
+                                if child.text(0) == file_name:
+                                    self.project_tree.setCurrentItem(child)
+                                    self.project_tree.scrollToItem(child)
+                                    return
+                    return
 
     def _highlight_tree_node(self, case_name: str, directory: str) -> None:
         """在项目树中高亮对应的 DSL 节点"""
@@ -1985,11 +2018,14 @@ class MainWindow(QMainWindow):
         if not full_path or not full_path.exists():
             QMessageBox.critical(self, "错误", f"文件不存在: {file_name}")
             return
+
+        file_key = f"viewer:{file_type}:{file_name}"
         try:
             with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
             for i in range(self.editor_tabs.count()):
-                if self.editor_tabs.tabText(i) == file_name:
+                tab_data = self.editor_tabs.tabBar().tabData(i)
+                if isinstance(tab_data, dict) and tab_data.get("file_key") == file_key:
                     self.editor_tabs.setCurrentIndex(i)
                     return
             editor = DSLTextEditor()
@@ -1997,6 +2033,7 @@ class MainWindow(QMainWindow):
             if file_type in ("dbc_file", "env_dbc", "system_variable"):
                 editor.setReadOnly(True)
             tab = self.editor_tabs.addTab(editor, file_name)
+            self.editor_tabs.tabBar().setTabData(tab, {"file_key": file_key, "editor_type": "viewer"})
             self.editor_tabs.setCurrentIndex(tab)
             self.update_status(f"打开文件 '{file_name}' (只读模式)")
         except Exception as e:
