@@ -85,9 +85,11 @@ class ProjectTreeWidget(QTreeWidget):
                 case_type = item_data.get("case_type", "py")
                 self.main_window.copy_automation_directory(dir_path, case_type)
             else:
-                self.main_window.copy_dsl_items(selected_items)
+                items_data = [si.data(0, Qt.ItemDataRole.UserRole) for si in selected_items]
+                self.main_window.copy_dsl_items(items_data)
         else:
-            self.main_window.copy_dsl_items(selected_items)
+            items_data = [si.data(0, Qt.ItemDataRole.UserRole) for si in selected_items]
+            self.main_window.copy_dsl_items(items_data)
 
     def on_paste_shortcut(self):
         """Ctrl+V 快捷键处理"""
@@ -1244,23 +1246,21 @@ class MainWindow(QMainWindow):
         has_multiple_selection = len(selected_items) > 1
 
         # 多选批量操作
-        # 多选批量操作
         if has_multiple_selection:
+            items_data = [si.data(0, Qt.ItemDataRole.UserRole) for si in selected_items]
             all_dsl_items = all(
-                (d := si.data(0, Qt.ItemDataRole.UserRole)) and d.get("type") in ("file", "directory")
-                for si in selected_items
+                d and d.get("type") in ("file", "directory") for d in items_data
             )
             all_automation_items = all(
-                (d := si.data(0, Qt.ItemDataRole.UserRole)) and d.get("type") in ("automation_file", "automation_directory")
-                for si in selected_items
+                d and d.get("type") in ("automation_file", "automation_directory") for d in items_data
             )
             if all_dsl_items:
-                menu.addAction("复制").triggered.connect(lambda: self.copy_dsl_items(selected_items))
-                menu.addAction("删除").triggered.connect(lambda: self.delete_dsl_items(selected_items))
+                menu.addAction("复制").triggered.connect(lambda: self.copy_dsl_items(items_data))
+                menu.addAction("删除").triggered.connect(lambda: self.delete_dsl_items(items_data))
                 menu.exec(self.project_tree.mapToGlobal(position))
                 return
             if all_automation_items:
-                menu.addAction("删除").triggered.connect(lambda: self.delete_automation_items(selected_items))
+                menu.addAction("删除").triggered.connect(lambda: self.delete_automation_items(items_data))
                 menu.exec(self.project_tree.mapToGlobal(position))
                 return
 
@@ -1677,12 +1677,12 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.critical(self, "错误", "重命名目录失败")
 
-    def delete_dsl_items(self, items: List[QTreeWidgetItem]) -> None:
+    def delete_dsl_items(self, items_data: List[Dict[str, Any]]) -> None:
         """批量删除 DSL 文件和目录"""
-        if not items:
+        if not items_data:
             return
-        file_count = sum(1 for it in items if (d := it.data(0, Qt.ItemDataRole.UserRole)) and d.get("type") == "file")
-        dir_count = sum(1 for it in items if (d := it.data(0, Qt.ItemDataRole.UserRole)) and d.get("type") == "directory")
+        file_count = sum(1 for d in items_data if d and d.get("type") == "file")
+        dir_count = sum(1 for d in items_data if d and d.get("type") == "directory")
 
         message = "确定要删除以下项目吗？\n\n"
         if file_count > 0:
@@ -1698,9 +1698,10 @@ class MainWindow(QMainWindow):
         batch_entries: List[Dict[str, Any]] = []
         delete_tasks: List[Dict[str, Any]] = []
 
-        for item in items:
-            item_data = item.data(0, Qt.ItemDataRole.UserRole)
-            if item_data and item_data.get("type") == "file":
+        for item_data in items_data:
+            if not item_data:
+                continue
+            if item_data.get("type") == "file":
                 file_path = item_data.get("path", "")
                 if file_path.endswith('.dsl'):
                     cn = Path(file_path).stem
@@ -1779,17 +1780,18 @@ class MainWindow(QMainWindow):
         self.clipboard = {"type": "items", "items": [{"type": "directory", "directory": directory}]}
         self.update_status(f"已复制目录 '{directory}'")
 
-    def copy_dsl_items(self, items: List[QTreeWidgetItem]) -> None:
+    def copy_dsl_items(self, items_data: List[Dict[str, Any]]) -> None:
         clipboard_items = []
-        for item in items:
-            item_data = item.data(0, Qt.ItemDataRole.UserRole)
-            if item_data and item_data.get("type") == "file":
+        for item_data in items_data:
+            if not item_data:
+                continue
+            if item_data.get("type") == "file":
                 file_path = item_data.get("path", "")
                 if file_path.endswith('.dsl'):
                     cn = PurePosixPath(file_path).stem
                     d = str(PurePosixPath(file_path).parent) if str(PurePosixPath(file_path).parent) != "." else ""
                     clipboard_items.append({"type": "file", "case_name": cn, "directory": d})
-            elif item_data and item_data.get("type") == "directory":
+            elif item_data.get("type") == "directory":
                 clipboard_items.append({"type": "directory", "directory": item_data.get("path", "")})
         if clipboard_items:
             self.clipboard = {"type": "items", "items": clipboard_items}
@@ -2994,13 +2996,13 @@ class MainWindow(QMainWindow):
                 self._undo_stack.pop()
             QMessageBox.critical(self, "错误", f"删除文件失败: {e}")
             
-    def delete_automation_items(self, items: List[QTreeWidgetItem]) -> None:
+    def delete_automation_items(self, items_data: List[Dict[str, Any]]) -> None:
         """批量删除 Automation Cases 文件和目录"""
-        if not items:
+        if not items_data:
             return
 
-        file_count = sum(1 for it in items if (d := it.data(0, Qt.ItemDataRole.UserRole)) and d.get("type") == "automation_file")
-        dir_count = sum(1 for it in items if (d := it.data(0, Qt.ItemDataRole.UserRole)) and d.get("type") == "automation_directory")
+        file_count = sum(1 for d in items_data if d and d.get("type") == "automation_file")
+        dir_count = sum(1 for d in items_data if d and d.get("type") == "automation_directory")
 
         message = "确定要删除以下项目吗？\n\n"
         if file_count > 0:
@@ -3016,8 +3018,7 @@ class MainWindow(QMainWindow):
         batch_entries: List[Dict[str, Any]] = []
         delete_tasks: List[Dict[str, Any]] = []
 
-        for item in items:
-            item_data = item.data(0, Qt.ItemDataRole.UserRole)
+        for item_data in items_data:
             if not item_data:
                 continue
             item_type = item_data.get("type")
