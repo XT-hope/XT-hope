@@ -152,17 +152,17 @@ class DbcToVsysvarTests(unittest.TestCase):
 
 	def test_requested_encoding_is_used_directly(self) -> None:
 		with tempfile.TemporaryDirectory() as temp_dir:
-			dbc_path = Path(temp_dir) / "control_utf8.dbc"
-			dbc_path.write_bytes(CONTROL_DBC.encode("utf-8"))
+			dbc_path = Path(temp_dir) / "control_gbk.dbc"
+			dbc_path.write_bytes(CONTROL_DBC.encode("gb18030"))
 
 			text = read_text_file(str(dbc_path), encoding="gb18030")
 
-			self.assertIsInstance(text, str)
+			self.assertIn('CM_ SG_ 573 PAD_AVPPauseReq_S "用户暂停";', text)
 
-	def test_auto_detects_gbk_when_utf8_strict_decode_fails(self) -> None:
-		text = decode_dbc_bytes('CM_ SG_ 268 Checksum_10C_S "校验值_10C_S";'.encode("gbk"))
+	def test_decode_uses_utf8_sig_by_default(self) -> None:
+		text = decode_dbc_bytes(CONTROL_DBC.encode("utf-8-sig"))
 
-		self.assertIn("校验值_10C_S", text)
+		self.assertIn('CM_ SG_ 573 PAD_AVPPauseReq_S "用户暂停";', text)
 
 	def test_parses_cli_dbc_specs(self) -> None:
 		self.assertEqual(("ControlCAN", "control.dbc"), parse_dbc_spec("ControlCAN=control.dbc"))

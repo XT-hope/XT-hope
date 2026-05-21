@@ -51,28 +51,8 @@ def read_text_file(path: str, encoding: Optional[str] = None) -> str:
 
 
 def decode_dbc_bytes(data: bytes, preferred_encoding: Optional[str] = None) -> str:
-	if preferred_encoding:
-		return data.decode(preferred_encoding, errors="replace")
-
-	for candidate in unique_encodings(["utf-8-sig", "utf-8", "gb18030", "gbk", "cp936", "cp1252"]):
-		try:
-			return data.decode(candidate)
-		except UnicodeDecodeError:
-			continue
-
-	return data.decode("utf-8", errors="replace")
-
-
-def unique_encodings(encodings: Sequence[str]) -> List[str]:
-	unique: List[str] = []
-	seen = set()
-	for encoding in encodings:
-		normalized = encoding.lower()
-		if normalized in seen:
-			continue
-		seen.add(normalized)
-		unique.append(encoding)
-	return unique
+	encoding = preferred_encoding or "utf-8-sig"
+	return data.decode(encoding)
 
 
 def parse_dbc_file(path: str, encoding: Optional[str] = None) -> DbcDatabase:
