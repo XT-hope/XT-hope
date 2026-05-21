@@ -232,8 +232,9 @@ def signal_member_specs(
 	signal: DbcSignal,
 ) -> Iterable[Tuple[str, str, Decimal, Optional[Decimal], Optional[Decimal], bool]]:
 	raw_min, raw_max = raw_range_from_physical(signal)
+	value_member_type = "int" if signal.choices else "double"
 	return (
-		("Pv", "double", physical_start_value(signal), signal.minimum, signal.maximum, True),
+		("Pv", value_member_type, physical_start_value(signal), signal.minimum, signal.maximum, True),
 		("Rv", "int", signal.start_raw, raw_min, raw_max, True),
 		("Factor", "double", signal.factor, None, None, False),
 		("Offset", "double", signal.offset, None, None, False),

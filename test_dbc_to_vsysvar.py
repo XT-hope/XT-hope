@@ -185,12 +185,19 @@ class DbcToVsysvarTests(unittest.TestCase):
 		database = parse_dbc_text(ENUM_DBC)
 		tree = build_vsysvar_tree([("ControlCAN", database)])
 		root = tree.getroot()
+		pv_member = root.find(
+			"./namespace/namespace[@name='ControlCAN']/struct[@name='lda_0x237']"
+			"/structMember[@name='LDA_Func_Dis_Confm_Button_Pv']"
+		)
 		member = root.find(
 			"./namespace/namespace[@name='ControlCAN']/struct[@name='lda_0x237']"
 			"/structMember[@name='LDA_Func_Dis_Confm_Button_Rv']"
 		)
 
+		self.assertIsNotNone(pv_member)
+		self.assertEqual("int", pv_member.attrib["type"])
 		self.assertIsNotNone(member)
+		self.assertEqual("int", member.attrib["type"])
 		value_table = member.find("./valuetable[@name='LDA_Func_Dis_Confm_Button']")
 		self.assertIsNotNone(value_table)
 		entries = {entry.attrib["value"]: entry.attrib["displayString"] for entry in value_table.findall("valuetableentry")}
