@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+from xml.etree import ElementTree as ET
+
+from xodr_converter.dbc_to_vsysvar import (
+	build_vsysvar_tree,
+	convert_dbc_files_to_vsysvar,
+	parse_dbc_text,
+	parse_dbc_spec,
+)
+
+
+CONTROL_DBC = """
+VERSION ""
+
+NS_ :
+	CM_
+	BA_
+
+BS_:
+
+BU_: Media ADC EPS
+
+BO_ 573 Media_0x23D: 8 Media
+ SG_ PAD_AVPPauseReq_S : 0|1@1+ (1,0) [0|1] ""  ADC
+ SG_ EPS_SteerPinionAg : 44|16@1- (0.1,0) [-720|720] "deg"  ADC
+
+CM_ SG_ 573 PAD_AVPPauseReq_S "用户暂停";
+CM_ SG_ 573 EPS_SteerPinionAg "转向小齿轮角度";
+BA_ "GenSigStartValue" SG_ 573 PAD_AVPPauseReq_S 0;
+BA_ "GenSigStartValue" SG_ 573 EPS_SteerPinionAg 2810;
+"""
+
+
+CHASSIS_DBC = """
+VERSION ""
+
+NS_ :
+	BA_
+
+BS_:
+
+BU_: ABS ADC
+
+BO_ 100 VehicleStatus: 8 ABS
+ SG_ VehicleSpeed : 0|16@1+ (0.01,0) [0|250] "km/h"  ADC
+
+BA_ "GenSigStartValue" SG_ 100 VehicleSpeed 1234;
+"""
+
+
+class DbcToVsysvarTests(unittest.TestCase):
+	def test_builds_struct_members_and_message_variable(self) -> None:
+		database = parse_dbc_text(CONTROL_DBC)
+		tree = build_vsysvar_tree([("ControlCAN", database)])
+		root = tree.getroot()
+
+		namespace = root.find("./namespace/namespace[@name='ControlCAN']")
+		self.assertIsNotNone(namespace)
+
+		struct = namespace.find("./struct[@name='media_0x23d']")
+		self.assertIsNotNone(struct)
+		self.assertEqual("False", struct.attrib["isUnion"])
+		self.assertEqual("False", struct.attrib["definedBinaryLayout"])
+
+		members = {member.attrib["name"]: member.attrib for member in struct.findall("structMember")}
+		self.assertEqual(8, len(members))
+
+		pause_pv = members["PAD_AVPPauseReq_S_Pv"]
+		self.assertEqual("double", pause_pv["type"])
+		self.assertEqual("false", pause_pv["isSigned"])
+		self.assertEqual("0", pause_pv["startValue"])
+		self.assertEqual("0", pause_pv["minValue"])
+		self.assertEqual("1", pause_pv["maxValue"])
+		self.assertEqual("用户暂停", pause_pv["comment"])
+
+		angle_pv = members["EPS_SteerPinionAg_Pv"]
+		self.assertEqual("double", angle_pv["type"])
+		self.assertEqual("true", angle_pv["isSigned"])
+		self.assertEqual("281", angle_pv["startValue"])
+		self.assertEqual("-720", angle_pv["minValue"])
+		self.assertEqual("720", angle_pv["maxValue"])
+
+		angle_rv = members["EPS_SteerPinionAg_Rv"]
+		self.assertEqual("int", angle_rv["type"])
+		self.assertEqual("2810", angle_rv["startValue"])
+		self.assertEqual("-7200", angle_rv["minValue"])
+		self.assertEqual("7200", angle_rv["maxValue"])
+
+		angle_factor = members["EPS_SteerPinionAg_Factor"]
+		self.assertEqual("double", angle_factor["type"])
+		self.assertEqual("0.1", angle_factor["startValue"])
+		self.assertNotIn("minValue", angle_factor)
+		self.assertNotIn("maxValue", angle_factor)
+
+		variable = namespace.find("./variable[@name='Media_0x23D']")
+		self.assertIsNotNone(variable)
+		self.assertEqual("struct", variable.attrib["type"])
+		self.assertEqual("ControlCAN::media_0x23d", variable.attrib["structDefinition"])
+		self.assertEqual("512", variable.attrib["bitcount"])
+
+	def test_writes_multiple_dbc_namespaces_to_one_file(self) -> None:
+		with tempfile.TemporaryDirectory() as temp_dir:
+			temp_path = Path(temp_dir)
+			control_path = temp_path / "control.dbc"
+			chassis_path = temp_path / "chassis.dbc"
+			output_path = temp_path / "vehicle.vsysvar"
+			control_path.write_text(CONTROL_DBC, encoding="utf-8")
+			chassis_path.write_text(CHASSIS_DBC, encoding="utf-8")
+
+			convert_dbc_files_to_vsysvar(
+				[
+					("ControlCAN", str(control_path)),
+					("ChassisCAN", str(chassis_path)),
+				],
+				str(output_path),
+			)
+
+			root = ET.parse(output_path).getroot()
+			self.assertEqual("4", root.attrib["version"])
+			self.assertIsNotNone(root.find("./namespace/namespace[@name='ControlCAN']"))
+			self.assertIsNotNone(root.find("./namespace/namespace[@name='ChassisCAN']"))
+			self.assertIsNotNone(
+				root.find("./namespace/namespace[@name='ChassisCAN']/variable[@name='VehicleStatus']")
+			)
+
+	def test_parses_cli_dbc_specs(self) -> None:
+		self.assertEqual(("ControlCAN", "control.dbc"), parse_dbc_spec("ControlCAN=control.dbc"))
+		namespace, path = parse_dbc_spec("/tmp/body-network.dbc")
+		self.assertEqual("body_network", namespace)
+		self.assertEqual("/tmp/body-network.dbc", path)
+
+
+if __name__ == "__main__":
+	unittest.main()
