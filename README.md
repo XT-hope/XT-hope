@@ -24,6 +24,18 @@ python3 -m xodr_converter.cli \
 ## Outputs
 - An XODR file with a single road composed of lane sections, lane markings, zebra objects, and inferred traffic lights near stops.
 
+## DBC to CANoe system variables
+Convert one or more DBC files into a single CANoe `.vsysvar` XML file:
+
+```bash
+python3 -m xodr_converter.dbc_to_vsysvar \
+  --dbc ControlCAN=/path/to/control.dbc \
+  --dbc ChassisCAN=/path/to/chassis.dbc \
+  --out /path/to/vehicle.vsysvar
+```
+
+Each DBC becomes one namespace. Each DBC message becomes one struct definition plus one struct variable. Each signal creates `_Pv`, `_Rv`, `_Factor`, and `_Offset` struct members.
+
 ## Notes
 - Local ENU means: X axis points East, Y axis points North, Z axis Up, with origin at the first GPS fix. We use a local tangent-plane approximation suitable for short trips. Ego points (x forward, y left) are rotated by GPS heading (yaw clockwise from North) into this ENU frame.
 - Plan view (reference line) uses a parametric cubic polynomial (paramPoly3) fitted to the trajectory, with straight-line degenerate cubic when needed.
