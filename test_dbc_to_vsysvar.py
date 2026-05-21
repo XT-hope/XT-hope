@@ -10,6 +10,7 @@ from xodr_converter.dbc_to_vsysvar import (
 	convert_dbc_files_to_vsysvar,
 	parse_dbc_text,
 	parse_dbc_spec,
+	read_text_file,
 )
 
 
@@ -130,6 +131,23 @@ class DbcToVsysvarTests(unittest.TestCase):
 			self.assertIsNotNone(
 				root.find("./namespace/namespace[@name='ChassisCAN']/variable[@name='VehicleStatus']")
 			)
+
+	def test_reads_gb18030_encoded_chinese_comments(self) -> None:
+		with tempfile.TemporaryDirectory() as temp_dir:
+			dbc_path = Path(temp_dir) / "control_gbk.dbc"
+			dbc_path.write_bytes(CONTROL_DBC.encode("gb18030"))
+
+			text = read_text_file(str(dbc_path), encoding="gb18030")
+			database = parse_dbc_text(text)
+			tree = build_vsysvar_tree([("ControlCAN", database)])
+			root = tree.getroot()
+			member = root.find(
+				"./namespace/namespace[@name='ControlCAN']/struct[@name='media_0x23d']"
+				"/structMember[@name='PAD_AVPPauseReq_S_Pv']"
+			)
+
+			self.assertIsNotNone(member)
+			self.assertEqual("用户暂停", member.attrib["comment"])
 
 	def test_parses_cli_dbc_specs(self) -> None:
 		self.assertEqual(("ControlCAN", "control.dbc"), parse_dbc_spec("ControlCAN=control.dbc"))

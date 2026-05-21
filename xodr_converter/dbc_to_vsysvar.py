@@ -42,10 +42,13 @@ class DbcDatabase:
 	messages: List[DbcMessage]
 
 
-def read_text_file(path: str) -> str:
+def read_text_file(path: str, encoding: Optional[str] = None) -> str:
 	"""Read DBC text while tolerating common Chinese and UTF encodings."""
 	with open(path, "rb") as fh:
 		data = fh.read()
+
+	if encoding:
+		return data.decode(encoding)
 
 	for encoding in ("utf-8-sig", "utf-8", "gb18030", "cp1252"):
 		try:
@@ -55,8 +58,8 @@ def read_text_file(path: str) -> str:
 	return data.decode("utf-8", errors="replace")
 
 
-def parse_dbc_file(path: str) -> DbcDatabase:
-	return parse_dbc_text(read_text_file(path))
+def parse_dbc_file(path: str, encoding: Optional[str] = None) -> DbcDatabase:
+	return parse_dbc_text(read_text_file(path, encoding=encoding))
 
 
 def parse_dbc_text(text: str) -> DbcDatabase:
@@ -272,8 +275,10 @@ def derive_namespace_from_path(path: str) -> str:
 	return name or "DBC"
 
 
-def convert_dbc_files_to_vsysvar(dbc_specs: Sequence[Tuple[str, str]], output_path: str) -> None:
-	databases = [(namespace, parse_dbc_file(path)) for namespace, path in dbc_specs]
+def convert_dbc_files_to_vsysvar(
+	dbc_specs: Sequence[Tuple[str, str]], output_path: str, encoding: Optional[str] = None
+) -> None:
+	databases = [(namespace, parse_dbc_file(path, encoding=encoding)) for namespace, path in dbc_specs]
 	tree = build_vsysvar_tree(databases)
 	write_vsysvar_file(tree, output_path)
 
@@ -289,9 +294,17 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 		help="DBC input. Use Namespace=path/to/file.dbc; may be repeated.",
 	)
 	parser.add_argument("--out", required=True, help="Output .vsysvar path")
+	parser.add_argument(
+		"--dbc-encoding",
+		help="Optional DBC file encoding, for example gb18030 for GBK/ANSI Chinese DBC files.",
+	)
 	args = parser.parse_args(argv)
 
-	convert_dbc_files_to_vsysvar([parse_dbc_spec(spec) for spec in args.dbc], args.out)
+	convert_dbc_files_to_vsysvar(
+		[parse_dbc_spec(spec) for spec in args.dbc],
+		args.out,
+		encoding=args.dbc_encoding,
+	)
 
 
 if __name__ == "__main__":

@@ -35,6 +35,7 @@ Convert one or more DBC files into a single CANoe `.vsysvar` XML file:
 python3 -m xodr_converter.dbc_to_vsysvar \
   --dbc ControlCAN=/path/to/control.dbc \
   --dbc ChassisCAN=/path/to/chassis.dbc \
+  --dbc-encoding gb18030 \
   --out /path/to/vehicle.vsysvar
 ```
 
