@@ -47,25 +47,48 @@ def read_text_file(path: str, encoding: Optional[str] = None) -> str:
 	with open(path, "rb") as fh:
 		data = fh.read()
 
-	encodings = []
-	if encoding:
-		encodings.append(encoding)
-	encodings.extend(["utf-8-sig", "utf-8", "gb18030", "gbk", "cp936", "cp1252"])
+	return decode_dbc_bytes(data, preferred_encoding=encoding)
 
-	tried = set()
-	for candidate in encodings:
-		normalized = candidate.lower()
-		if normalized in tried:
-			continue
-		tried.add(normalized)
-		try:
-			return data.decode(candidate)
-		except UnicodeDecodeError:
-			continue
 
-	if encoding:
-		return data.decode(encoding, errors="replace")
-	return data.decode("utf-8", errors="replace")
+def decode_dbc_bytes(data: bytes, preferred_encoding: Optional[str] = None) -> str:
+	candidates = unique_encodings(
+		[preferred_encoding, "utf-8-sig", "utf-8", "gb18030", "gbk", "cp936", "cp1252"]
+	)
+	best_text = ""
+	best_score: Optional[Tuple[int, int, int]] = None
+
+	for index, candidate in enumerate(candidates):
+		text = data.decode(candidate, errors="replace")
+		score = score_decoded_text(text, preferred=candidate == preferred_encoding, order=index)
+		if best_score is None or score > best_score:
+			best_text = text
+			best_score = score
+
+	return best_text
+
+
+def unique_encodings(encodings: Sequence[Optional[str]]) -> List[str]:
+	unique: List[str] = []
+	seen = set()
+	for encoding in encodings:
+		if not encoding:
+			continue
+		normalized = encoding.lower()
+		if normalized in seen:
+			continue
+		seen.add(normalized)
+		unique.append(encoding)
+	return unique
+
+
+def score_decoded_text(text: str, preferred: bool, order: int) -> Tuple[int, int, int]:
+	replacement_count = text.count("\ufffd")
+	cjk_count = sum(1 for char in text if "\u4e00" <= char <= "\u9fff")
+	mojibake_count = sum(1 for char in text if char in "ÃÂÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞß")
+	score = cjk_count * 20 - replacement_count * 100 - mojibake_count * 10
+	if preferred:
+		score += 5
+	return score, -replacement_count, -order
 
 
 def parse_dbc_file(path: str, encoding: Optional[str] = None) -> DbcDatabase:

@@ -10,6 +10,7 @@ from xodr_converter.dbc_to_vsysvar import (
 	convert_dbc_files_to_vsysvar,
 	parse_dbc_text,
 	parse_dbc_spec,
+	decode_dbc_bytes,
 	read_text_file,
 )
 
@@ -157,6 +158,12 @@ class DbcToVsysvarTests(unittest.TestCase):
 			text = read_text_file(str(dbc_path), encoding="gb18030")
 
 			self.assertIn('CM_ SG_ 573 PAD_AVPPauseReq_S "用户暂停";', text)
+
+	def test_prefers_chinese_decoding_over_mojibake(self) -> None:
+		text = decode_dbc_bytes('CM_ SG_ 268 Checksum_10C_S "校验值_10C_S";'.encode("gbk"))
+
+		self.assertIn("校验值_10C_S", text)
+		self.assertNotIn("У���", text)
 
 	def test_parses_cli_dbc_specs(self) -> None:
 		self.assertEqual(("ControlCAN", "control.dbc"), parse_dbc_spec("ControlCAN=control.dbc"))
