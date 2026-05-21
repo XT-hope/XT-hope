@@ -19,6 +19,7 @@ VERSION ""
 NS_ :
 	CM_
 	BA_
+	BA_DEF_
 
 BS_:
 
@@ -28,6 +29,7 @@ BO_ 573 Media_0x23D: 8 Media
  SG_ PAD_AVPPauseReq_S : 0|1@1+ (1,0) [0|1] ""  ADC
  SG_ EPS_SteerPinionAg : 44|16@1- (0.1,0) [-720|720] "deg"  ADC
 
+BA_DEF_ SG_ "GenSigStartValue" FLOAT 0 100000000000;
 CM_ SG_ 573 PAD_AVPPauseReq_S "用户暂停";
 CM_ SG_ 573 EPS_SteerPinionAg "转向小齿轮角度";
 BA_ "GenSigStartValue" SG_ 573 PAD_AVPPauseReq_S 0;
@@ -40,6 +42,7 @@ VERSION ""
 
 NS_ :
 	BA_
+	BA_DEF_
 
 BS_:
 
@@ -48,6 +51,7 @@ BU_: ABS ADC
 BO_ 100 VehicleStatus: 8 ABS
  SG_ VehicleSpeed : 0|16@1+ (0.01,0) [0|250] "km/h"  ADC
 
+BA_DEF_ SG_ "GenSigStartValue" FLOAT 0 100000000000;
 BA_ "GenSigStartValue" SG_ 100 VehicleSpeed 1234;
 """
 

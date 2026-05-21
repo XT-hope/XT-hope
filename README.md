@@ -11,7 +11,11 @@ This project converts ego-centric BEV lane perception and GPS trajectory data in
 - At intersections, lane lines may be missing; the ego trajectory continues through the gap until lanes reappear.
 
 ## Install
-No external dependencies; uses Python 3 standard library.
+Install Python dependencies:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
 
 ## Run
 ```bash

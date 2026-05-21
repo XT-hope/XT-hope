@@ -4,32 +4,11 @@ import argparse
 import os
 import re
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from xml.etree import ElementTree as ET
 
-
-NUMBER_RE = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
-
-MESSAGE_RE = re.compile(
-	r"^BO_\s+(?P<id>\d+)\s+(?P<name>\S+)\s*:\s+(?P<dlc>\d+)\s+(?P<sender>\S+)"
-)
-SIGNAL_RE = re.compile(
-	r"^SG_\s+(?P<name>\S+)(?:\s+\S+)?\s*:\s*"
-	r"(?P<start>\d+)\|(?P<length>\d+)@(?P<byte_order>[01])(?P<sign>[+-])\s*"
-	r"\((?P<factor>{number}),(?P<offset>{number})\)\s*"
-	r"\[(?P<minimum>{number})\|(?P<maximum>{number})\]\s*"
-	r"\"(?P<unit>(?:\\.|[^\"])*)\"\s*(?P<receivers>.*)$".format(number=NUMBER_RE)
-)
-COMMENT_RE = re.compile(
-	r"^CM_\s+SG_\s+(?P<message_id>\d+)\s+(?P<signal_name>\S+)\s+\"(?P<comment>(?:\\.|[^\"])*)\"\s*;"
-)
-START_VALUE_RE = re.compile(
-	r"^BA_\s+\"GenSigStartValue\"\s+SG_\s+"
-	r"(?P<message_id>\d+)\s+(?P<signal_name>\S+)\s+(?P<value>{number})\s*;".format(
-		number=NUMBER_RE
-	)
-)
+import cantools
 
 
 @dataclass
@@ -81,91 +60,48 @@ def parse_dbc_file(path: str) -> DbcDatabase:
 
 
 def parse_dbc_text(text: str) -> DbcDatabase:
-	messages: List[DbcMessage] = []
-	signal_by_key: Dict[Tuple[int, str], DbcSignal] = {}
-	comments: Dict[Tuple[int, str], str] = {}
-	start_values: Dict[Tuple[int, str], Decimal] = {}
-	current_message: Optional[DbcMessage] = None
-
-	for raw_line in text.splitlines():
-		line = raw_line.strip()
-		if not line:
-			continue
-
-		message_match = MESSAGE_RE.match(line)
-		if message_match:
-			current_message = DbcMessage(
-				frame_id=int(message_match.group("id")),
-				name=message_match.group("name"),
-				dlc=int(message_match.group("dlc")),
-				sender=message_match.group("sender"),
-			)
-			messages.append(current_message)
-			continue
-
-		signal_match = SIGNAL_RE.match(line)
-		if signal_match and current_message is not None:
-			signal = DbcSignal(
-				name=signal_match.group("name"),
-				start_bit=int(signal_match.group("start")),
-				length=int(signal_match.group("length")),
-				byte_order=int(signal_match.group("byte_order")),
-				is_signed=signal_match.group("sign") == "-",
-				factor=parse_decimal(signal_match.group("factor")),
-				offset=parse_decimal(signal_match.group("offset")),
-				minimum=parse_decimal(signal_match.group("minimum")),
-				maximum=parse_decimal(signal_match.group("maximum")),
-				unit=unescape_dbc_string(signal_match.group("unit")),
-				receivers=parse_receivers(signal_match.group("receivers")),
-			)
-			current_message.signals.append(signal)
-			signal_by_key[(current_message.frame_id, signal.name)] = signal
-			continue
-
-		comment_match = COMMENT_RE.match(line)
-		if comment_match:
-			key = (int(comment_match.group("message_id")), comment_match.group("signal_name"))
-			comments[key] = unescape_dbc_string(comment_match.group("comment"))
-			continue
-
-		start_value_match = START_VALUE_RE.match(line)
-		if start_value_match:
-			key = (
-				int(start_value_match.group("message_id")),
-				start_value_match.group("signal_name"),
-			)
-			start_values[key] = parse_decimal(start_value_match.group("value"))
-			continue
-
-	for key, comment in comments.items():
-		signal = signal_by_key.get(key)
-		if signal is not None:
-			signal.comment = comment
-
-	for key, start_value in start_values.items():
-		signal = signal_by_key.get(key)
-		if signal is not None:
-			signal.start_raw = start_value
-
-	return DbcDatabase(messages=messages)
+	database = cantools.database.load_string(
+		text,
+		database_format="dbc",
+		strict=False,
+		sort_signals=None,
+	)
+	return DbcDatabase(messages=[convert_cantools_message(message) for message in database.messages])
 
 
-def parse_decimal(value: str) -> Decimal:
-	try:
-		return Decimal(value)
-	except InvalidOperation as exc:
-		raise ValueError(f"Invalid DBC numeric value: {value}") from exc
+def convert_cantools_message(message) -> DbcMessage:
+	senders = getattr(message, "senders", None) or []
+	return DbcMessage(
+		frame_id=message.frame_id,
+		name=message.name,
+		dlc=message.length,
+		sender=senders[0] if senders else "",
+		signals=[convert_cantools_signal(signal) for signal in message.signals],
+	)
 
 
-def parse_receivers(value: str) -> List[str]:
-	value = value.strip()
-	if not value:
-		return []
-	return [item.strip() for item in value.split(",") if item.strip()]
+def convert_cantools_signal(signal) -> DbcSignal:
+	return DbcSignal(
+		name=signal.name,
+		start_bit=signal.start,
+		length=signal.length,
+		byte_order=1 if signal.byte_order == "little_endian" else 0,
+		is_signed=signal.is_signed,
+		factor=to_decimal(signal.scale, Decimal("1")),
+		offset=to_decimal(signal.offset, Decimal("0")),
+		minimum=to_decimal(signal.minimum, Decimal("0")),
+		maximum=to_decimal(signal.maximum, Decimal("0")),
+		unit=signal.unit or "",
+		receivers=list(signal.receivers),
+		comment=signal.comment or "",
+		start_raw=to_decimal(signal.raw_initial, Decimal("0")),
+	)
 
 
-def unescape_dbc_string(value: str) -> str:
-	return value.replace(r"\"", '"').replace(r"\\", "\\")
+def to_decimal(value, default: Decimal) -> Decimal:
+	if value is None:
+		return default
+	return Decimal(str(value))
 
 
 def decimal_to_text(value: Decimal) -> str:
