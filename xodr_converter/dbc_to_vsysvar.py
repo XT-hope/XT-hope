@@ -82,7 +82,6 @@ def parse_dbc_file(path: str) -> DbcDatabase:
 
 def parse_dbc_text(text: str) -> DbcDatabase:
 	messages: List[DbcMessage] = []
-	message_by_id: Dict[int, DbcMessage] = {}
 	signal_by_key: Dict[Tuple[int, str], DbcSignal] = {}
 	comments: Dict[Tuple[int, str], str] = {}
 	start_values: Dict[Tuple[int, str], Decimal] = {}
@@ -102,7 +101,6 @@ def parse_dbc_text(text: str) -> DbcDatabase:
 				sender=message_match.group("sender"),
 			)
 			messages.append(current_message)
-			message_by_id[current_message.frame_id] = current_message
 			continue
 
 		signal_match = SIGNAL_RE.match(line)
