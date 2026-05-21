@@ -12,6 +12,12 @@ import cantools
 
 
 @dataclass
+class ValueTableEntry:
+	value: Decimal
+	description: str
+
+
+@dataclass
 class DbcSignal:
 	name: str
 	start_bit: int
@@ -26,6 +32,7 @@ class DbcSignal:
 	receivers: List[str]
 	comment: str = ""
 	start_raw: Decimal = Decimal("0")
+	choices: List[ValueTableEntry] = field(default_factory=list)
 
 
 @dataclass
@@ -95,7 +102,23 @@ def convert_cantools_signal(signal) -> DbcSignal:
 		receivers=list(signal.receivers),
 		comment=signal.comment or "",
 		start_raw=to_decimal(signal.raw_initial, Decimal("0")),
+		choices=convert_cantools_choices(signal.choices),
 	)
+
+
+def convert_cantools_choices(choices) -> List[ValueTableEntry]:
+	if not choices:
+		return []
+
+	entries: List[ValueTableEntry] = []
+	for value, description in choices.items():
+		entries.append(
+			ValueTableEntry(
+				value=to_decimal(value, Decimal("0")),
+				description=str(description),
+			)
+		)
+	return sorted(entries, key=lambda entry: entry.value)
 
 
 def to_decimal(value, default: Decimal) -> Decimal:
@@ -168,8 +191,8 @@ def add_message_struct_and_variable(
 
 	bitcount = 0
 	for signal in message.signals:
-		for suffix, member_type, start_value, min_value, max_value in signal_member_specs(signal):
-			ET.SubElement(
+		for suffix, member_type, start_value, min_value, max_value, include_value_table in signal_member_specs(signal):
+			member_element = ET.SubElement(
 				struct_element,
 				"structMember",
 				struct_member_attrs(
@@ -182,6 +205,8 @@ def add_message_struct_and_variable(
 					max_value=max_value,
 				),
 			)
+			if include_value_table and signal.choices:
+				add_value_table(member_element, signal)
 			bitcount += 64
 
 	ET.SubElement(
@@ -205,13 +230,13 @@ def add_message_struct_and_variable(
 
 def signal_member_specs(
 	signal: DbcSignal,
-) -> Iterable[Tuple[str, str, Decimal, Optional[Decimal], Optional[Decimal]]]:
+) -> Iterable[Tuple[str, str, Decimal, Optional[Decimal], Optional[Decimal], bool]]:
 	raw_min, raw_max = raw_range_from_physical(signal)
 	return (
-		("Pv", "double", physical_start_value(signal), signal.minimum, signal.maximum),
-		("Rv", "int", signal.start_raw, raw_min, raw_max),
-		("Factor", "double", signal.factor, None, None),
-		("Offset", "double", signal.offset, None, None),
+		("Pv", "double", physical_start_value(signal), signal.minimum, signal.maximum, True),
+		("Rv", "int", signal.start_raw, raw_min, raw_max, True),
+		("Factor", "double", signal.factor, None, None, False),
+		("Offset", "double", signal.offset, None, None, False),
 	)
 
 
@@ -242,6 +267,30 @@ def struct_member_attrs(
 	if max_value is not None:
 		attrs["maxValue"] = decimal_to_text(max_value)
 	return attrs
+
+
+def add_value_table(member_element: ET.Element, signal: DbcSignal) -> None:
+	value_table = ET.SubElement(
+		member_element,
+		"valuetable",
+		{
+			"name": signal.name,
+			"definesMinMax": "false",
+		},
+	)
+	for entry in signal.choices:
+		value = decimal_to_text(entry.value)
+		ET.SubElement(
+			value_table,
+			"valuetableentry",
+			{
+				"value": value,
+				"lowerBound": value,
+				"upperBound": value,
+				"description": entry.description,
+				"displayString": entry.description,
+			},
+		)
 
 
 def write_vsysvar_file(tree: ET.ElementTree, output_path: str) -> None:

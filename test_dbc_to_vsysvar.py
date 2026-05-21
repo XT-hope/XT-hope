@@ -58,6 +58,23 @@ BA_ "GenSigStartValue" SG_ 100 VehicleSpeed 1234;
 """
 
 
+ENUM_DBC = """
+VERSION ""
+
+NS_ :
+	VAL_
+
+BS_:
+
+BU_: LDA ADC
+
+BO_ 567 LDA_0x237: 8 LDA
+ SG_ LDA_Func_Dis_Confm_Button : 0|2@1+ (1,0) [0|3] "" ADC
+
+VAL_ 567 LDA_Func_Dis_Confm_Button 0 "Invalid" 1 "Europe" 2 "Other" 3 "Reserved";
+"""
+
+
 class DbcToVsysvarTests(unittest.TestCase):
 	def test_builds_struct_members_and_message_variable(self) -> None:
 		database = parse_dbc_text(CONTROL_DBC)
@@ -163,6 +180,29 @@ class DbcToVsysvarTests(unittest.TestCase):
 		text = decode_dbc_bytes(CONTROL_DBC.encode("utf-8-sig"))
 
 		self.assertIn('CM_ SG_ 573 PAD_AVPPauseReq_S "用户暂停";', text)
+
+	def test_writes_signal_value_table_from_val_definitions(self) -> None:
+		database = parse_dbc_text(ENUM_DBC)
+		tree = build_vsysvar_tree([("ControlCAN", database)])
+		root = tree.getroot()
+		member = root.find(
+			"./namespace/namespace[@name='ControlCAN']/struct[@name='lda_0x237']"
+			"/structMember[@name='LDA_Func_Dis_Confm_Button_Rv']"
+		)
+
+		self.assertIsNotNone(member)
+		value_table = member.find("./valuetable[@name='LDA_Func_Dis_Confm_Button']")
+		self.assertIsNotNone(value_table)
+		entries = {entry.attrib["value"]: entry.attrib["displayString"] for entry in value_table.findall("valuetableentry")}
+		self.assertEqual(
+			{
+				"0": "Invalid",
+				"1": "Europe",
+				"2": "Other",
+				"3": "Reserved",
+			},
+			entries,
+		)
 
 	def test_parses_cli_dbc_specs(self) -> None:
 		self.assertEqual(("ControlCAN", "control.dbc"), parse_dbc_spec("ControlCAN=control.dbc"))
