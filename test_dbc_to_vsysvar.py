@@ -149,6 +149,15 @@ class DbcToVsysvarTests(unittest.TestCase):
 			self.assertIsNotNone(member)
 			self.assertEqual("用户暂停", member.attrib["comment"])
 
+	def test_falls_back_when_requested_encoding_does_not_match_file(self) -> None:
+		with tempfile.TemporaryDirectory() as temp_dir:
+			dbc_path = Path(temp_dir) / "control_utf8.dbc"
+			dbc_path.write_bytes(CONTROL_DBC.encode("utf-8"))
+
+			text = read_text_file(str(dbc_path), encoding="gb18030")
+
+			self.assertIn('CM_ SG_ 573 PAD_AVPPauseReq_S "用户暂停";', text)
+
 	def test_parses_cli_dbc_specs(self) -> None:
 		self.assertEqual(("ControlCAN", "control.dbc"), parse_dbc_spec("ControlCAN=control.dbc"))
 		namespace, path = parse_dbc_spec("/tmp/body-network.dbc")

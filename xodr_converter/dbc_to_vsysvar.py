@@ -47,14 +47,24 @@ def read_text_file(path: str, encoding: Optional[str] = None) -> str:
 	with open(path, "rb") as fh:
 		data = fh.read()
 
+	encodings = []
 	if encoding:
-		return data.decode(encoding)
+		encodings.append(encoding)
+	encodings.extend(["utf-8-sig", "utf-8", "gb18030", "gbk", "cp936", "cp1252"])
 
-	for encoding in ("utf-8-sig", "utf-8", "gb18030", "cp1252"):
+	tried = set()
+	for candidate in encodings:
+		normalized = candidate.lower()
+		if normalized in tried:
+			continue
+		tried.add(normalized)
 		try:
-			return data.decode(encoding)
+			return data.decode(candidate)
 		except UnicodeDecodeError:
 			continue
+
+	if encoding:
+		return data.decode(encoding, errors="replace")
 	return data.decode("utf-8", errors="replace")
 
 
