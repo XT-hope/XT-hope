@@ -18,6 +18,15 @@ class ValueTableEntry:
 
 
 @dataclass
+class MessageInfo:
+	send_type_value: Decimal
+	send_type_name: str
+	send_type_choices: List[ValueTableEntry]
+	cycle_time: Decimal
+	cycle_time_max: Optional[Decimal] = None
+
+
+@dataclass
 class DbcSignal:
 	name: str
 	start_bit: int
@@ -41,6 +50,7 @@ class DbcMessage:
 	name: str
 	dlc: int
 	sender: str
+	info: MessageInfo
 	signals: List[DbcSignal] = field(default_factory=list)
 
 
@@ -83,7 +93,27 @@ def convert_cantools_message(message) -> DbcMessage:
 		name=message.name,
 		dlc=message.length,
 		sender=senders[0] if senders else "",
+		info=convert_cantools_message_info(message),
 		signals=[convert_cantools_signal(signal) for signal in message.signals],
+	)
+
+
+def convert_cantools_message_info(message) -> MessageInfo:
+	send_type_choices = get_attribute_choices(message, "GenMsgSendType") or default_send_type_choices()
+	send_type_value = get_message_attribute_value(message, "GenMsgSendType")
+	if send_type_value is None:
+		send_type_value = get_attribute_default_value(message, "GenMsgSendType")
+	send_type_index = resolve_send_type_index(send_type_value, send_type_choices)
+	cycle_time = get_message_attribute_value(message, "GenMsgCycleTime")
+	if cycle_time is None:
+		cycle_time = get_attribute_default_value(message, "GenMsgCycleTime")
+
+	return MessageInfo(
+		send_type_value=send_type_index,
+		send_type_name=choice_name_by_value(send_type_choices, send_type_index),
+		send_type_choices=send_type_choices,
+		cycle_time=to_decimal(cycle_time, Decimal("0")),
+		cycle_time_max=get_attribute_maximum(message, "GenMsgCycleTime"),
 	)
 
 
@@ -121,9 +151,69 @@ def convert_cantools_choices(choices) -> List[ValueTableEntry]:
 	return sorted(entries, key=lambda entry: entry.value)
 
 
+def default_send_type_choices() -> List[ValueTableEntry]:
+	return [
+		ValueTableEntry(Decimal(index), name)
+		for index, name in enumerate(["Cycle", "Event", "IfActive", "CE", "CA", "NoMsgSendType"])
+	]
+
+
+def get_message_attribute_value(message, name: str):
+	attribute = getattr(message.dbc, "_attributes", {}).get(name) if message.dbc else None
+	return getattr(attribute, "value", None) if attribute is not None else None
+
+
+def get_attribute_definition(message, name: str):
+	return getattr(message.dbc, "_attribute_definitions", {}).get(name) if message.dbc else None
+
+
+def get_attribute_default_value(message, name: str):
+	definition = get_attribute_definition(message, name)
+	return getattr(definition, "default_value", None) if definition is not None else None
+
+
+def get_attribute_maximum(message, name: str) -> Optional[Decimal]:
+	definition = get_attribute_definition(message, name)
+	if definition is None:
+		return None
+	return to_optional_decimal(getattr(definition, "maximum", None))
+
+
+def get_attribute_choices(message, name: str) -> List[ValueTableEntry]:
+	definition = get_attribute_definition(message, name)
+	choices = getattr(definition, "choices", None) if definition is not None else None
+	if not choices:
+		return []
+	return [ValueTableEntry(Decimal(index), str(choice)) for index, choice in enumerate(choices)]
+
+
+def resolve_send_type_index(value, choices: List[ValueTableEntry]) -> Decimal:
+	if value is None:
+		value = "Cycle"
+	if isinstance(value, str):
+		for entry in choices:
+			if entry.description == value:
+				return entry.value
+		return Decimal("0")
+	return to_decimal(value, Decimal("0"))
+
+
+def choice_name_by_value(choices: List[ValueTableEntry], value: Decimal) -> str:
+	for entry in choices:
+		if entry.value == value:
+			return entry.description
+	return "Cycle"
+
+
 def to_decimal(value, default: Decimal) -> Decimal:
 	if value is None:
 		return default
+	return Decimal(str(value))
+
+
+def to_optional_decimal(value) -> Optional[Decimal]:
+	if value is None:
+		return None
 	return Decimal(str(value))
 
 
@@ -163,6 +253,7 @@ def build_vsysvar_tree(dbc_specs: Sequence[Tuple[str, DbcDatabase]]) -> ET.Eleme
 	for namespace_name, database in dbc_specs:
 		namespace_element = ET.SubElement(root_namespace, "namespace", namespace_attrs(namespace_name))
 		for message in database.messages:
+			add_message_info_struct_and_variable(namespace_element, namespace_name, message)
 			add_message_struct_and_variable(namespace_element, namespace_name, message)
 
 	tree = ET.ElementTree(root)
@@ -172,6 +263,89 @@ def build_vsysvar_tree(dbc_specs: Sequence[Tuple[str, DbcDatabase]]) -> ET.Eleme
 
 def namespace_attrs(name: str) -> Dict[str, str]:
 	return {"name": name, "comment": "", "interface": ""}
+
+
+def add_message_info_struct_and_variable(
+	namespace_element: ET.Element, namespace_name: str, message: DbcMessage
+) -> None:
+	struct_name = f"{message.name.lower()}_info"
+	struct_element = ET.SubElement(
+		namespace_element,
+		"struct",
+		{
+			"name": struct_name,
+			"isUnion": "False",
+			"definedBinaryLayout": "False",
+			"comment": "",
+		},
+	)
+
+	member_count = 0
+	for name, start_value, min_value, max_value, choices in message_info_member_specs(message):
+		member_element = ET.SubElement(
+			struct_element,
+			"structMember",
+			struct_member_attrs(
+				name=name,
+				comment="",
+				is_signed=False,
+				member_type="int",
+				start_value=start_value,
+				min_value=min_value,
+				max_value=max_value,
+				bitcount=32,
+			),
+		)
+		if choices:
+			add_value_table(member_element, f"{name}Vt", choices)
+		member_count += 1
+
+	ET.SubElement(
+		namespace_element,
+		"variable",
+		{
+			"anlyzLocal": "2",
+			"readOnly": "false",
+			"valueSequence": "false",
+			"unit": "",
+			"name": f"{message.name}_Info",
+			"comment": "",
+			"bitcount": str(member_count * 32),
+			"isSigned": "true",
+			"encoding": "65001",
+			"type": "struct",
+			"structDefinition": f"{namespace_name}::{struct_name}",
+		},
+	)
+
+
+def message_info_member_specs(
+	message: DbcMessage,
+) -> Iterable[Tuple[str, Decimal, Optional[Decimal], Optional[Decimal], List[ValueTableEntry]]]:
+	prefix = message.name
+	send_type_max = Decimal(len(message.info.send_type_choices) - 1)
+	specs = [
+		(f"{prefix}_MsgOn", Decimal("1"), Decimal("0"), Decimal("1"), []),
+		(f"{prefix}_MsgOff", Decimal("0"), Decimal("0"), Decimal("1"), []),
+		(
+			f"{prefix}_MsgSendType",
+			message.info.send_type_value,
+			Decimal("0"),
+			send_type_max,
+			message.info.send_type_choices,
+		),
+	]
+	if message.info.send_type_name in {"Cycle", "CE", "CA"}:
+		specs.append(
+			(
+				f"{prefix}_MsgCycleTime",
+				message.info.cycle_time,
+				Decimal("0"),
+				message.info.cycle_time_max,
+				[],
+			)
+		)
+	return specs
 
 
 def add_message_struct_and_variable(
@@ -206,7 +380,7 @@ def add_message_struct_and_variable(
 				),
 			)
 			if include_value_table and signal.choices:
-				add_value_table(member_element, signal)
+				add_value_table(member_element, f"{signal.name}Vt", signal.choices)
 			bitcount += 64
 
 	ET.SubElement(
@@ -249,6 +423,7 @@ def struct_member_attrs(
 	start_value: Decimal,
 	min_value: Optional[Decimal],
 	max_value: Optional[Decimal],
+	bitcount: int = 64,
 ) -> Dict[str, str]:
 	attrs = {
 		"relativeOffset": "0",
@@ -257,7 +432,7 @@ def struct_member_attrs(
 		"isHidden": "False",
 		"name": name,
 		"comment": comment,
-		"bitcount": "64",
+		"bitcount": str(bitcount),
 		"isSigned": "true" if is_signed else "false",
 		"encoding": "65001",
 		"type": member_type,
@@ -270,16 +445,18 @@ def struct_member_attrs(
 	return attrs
 
 
-def add_value_table(member_element: ET.Element, signal: DbcSignal) -> None:
+def add_value_table(
+	member_element: ET.Element, value_table_name: str, entries: List[ValueTableEntry]
+) -> None:
 	value_table = ET.SubElement(
 		member_element,
 		"valuetable",
 		{
-			"name": signal.name,
+			"name": value_table_name,
 			"definesMinMax": "false",
 		},
 	)
-	for entry in signal.choices:
+	for entry in entries:
 		value = decimal_to_text(entry.value)
 		ET.SubElement(
 			value_table,

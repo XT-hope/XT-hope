@@ -63,15 +63,25 @@ VERSION ""
 
 NS_ :
 	VAL_
+	BA_
+	BA_DEF_
+	BA_DEF_DEF_
 
 BS_:
 
 BU_: LDA ADC
 
+BA_DEF_ BO_ "GenMsgSendType" ENUM "Cycle", "Event", "IfActive", "CE" ,"CA", "NoMsgSendType";
+BA_DEF_DEF_ "GenMsgSendType" "Cycle";
+BA_DEF_ BO_ "GenMsgCycleTime" INT 0 65535;
+BA_DEF_DEF_ "GenMsgCycleTime" 10;
+
 BO_ 567 LDA_0x237: 8 LDA
  SG_ LDA_Func_Dis_Confm_Button : 0|2@1+ (1,0) [0|3] "" ADC
 
 VAL_ 567 LDA_Func_Dis_Confm_Button 0 "Invalid" 1 "Europe" 2 "Other" 3 "Reserved";
+BA_ "GenMsgSendType" BO_ 567 3;
+BA_ "GenMsgCycleTime" BO_ 567 20;
 """
 
 
@@ -198,7 +208,7 @@ class DbcToVsysvarTests(unittest.TestCase):
 		self.assertEqual("int", pv_member.attrib["type"])
 		self.assertIsNotNone(member)
 		self.assertEqual("int", member.attrib["type"])
-		value_table = member.find("./valuetable[@name='LDA_Func_Dis_Confm_Button']")
+		value_table = member.find("./valuetable[@name='LDA_Func_Dis_Confm_ButtonVt']")
 		self.assertIsNotNone(value_table)
 		entries = {entry.attrib["value"]: entry.attrib["displayString"] for entry in value_table.findall("valuetableentry")}
 		self.assertEqual(
@@ -210,6 +220,36 @@ class DbcToVsysvarTests(unittest.TestCase):
 			},
 			entries,
 		)
+
+	def test_writes_message_info_struct_from_message_attributes(self) -> None:
+		database = parse_dbc_text(ENUM_DBC)
+		tree = build_vsysvar_tree([("ControlCAN", database)])
+		root = tree.getroot()
+		info_struct = root.find("./namespace/namespace[@name='ControlCAN']/struct[@name='lda_0x237_info']")
+		info_variable = root.find("./namespace/namespace[@name='ControlCAN']/variable[@name='LDA_0x237_Info']")
+
+		self.assertIsNotNone(info_struct)
+		self.assertIsNotNone(info_variable)
+		self.assertEqual("128", info_variable.attrib["bitcount"])
+
+		members = {member.attrib["name"]: member for member in info_struct.findall("structMember")}
+		self.assertEqual("1", members["LDA_0x237_MsgOn"].attrib["startValue"])
+		self.assertEqual("0", members["LDA_0x237_MsgOff"].attrib["startValue"])
+		self.assertEqual("3", members["LDA_0x237_MsgSendType"].attrib["startValue"])
+		self.assertEqual("20", members["LDA_0x237_MsgCycleTime"].attrib["startValue"])
+		for member in members.values():
+			self.assertEqual("32", member.attrib["bitcount"])
+			self.assertEqual("int", member.attrib["type"])
+
+		value_table = members["LDA_0x237_MsgSendType"].find("./valuetable[@name='LDA_0x237_MsgSendTypeVt']")
+		self.assertIsNotNone(value_table)
+		send_type_entries = {
+			entry.attrib["value"]: entry.attrib["displayString"]
+			for entry in value_table.findall("valuetableentry")
+		}
+		self.assertEqual("Cycle", send_type_entries["0"])
+		self.assertEqual("CE", send_type_entries["3"])
+		self.assertEqual("CA", send_type_entries["4"])
 
 	def test_parses_cli_dbc_specs(self) -> None:
 		self.assertEqual(("ControlCAN", "control.dbc"), parse_dbc_spec("ControlCAN=control.dbc"))
