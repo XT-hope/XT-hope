@@ -140,8 +140,12 @@ class DbcToVsysvarTests(unittest.TestCase):
 		tree = build_vsysvar_tree([("ControlCAN", database)])
 		root = tree.getroot()
 		node_struct = root.find("./namespace/namespace[@name='ControlCAN']/struct[@name='controlcan_node_info']")
+		node_variable = root.find("./namespace/namespace[@name='ControlCAN']/variable[@name='ControlCAN_Node_Info']")
 
 		self.assertIsNotNone(node_struct)
+		self.assertIsNotNone(node_variable)
+		self.assertEqual("96", node_variable.attrib["bitcount"])
+		self.assertEqual("ControlCAN::controlcan_node_info", node_variable.attrib["structDefinition"])
 		members = {member.attrib["name"]: member.attrib for member in node_struct.findall("structMember")}
 		self.assertEqual({"Media_MsgOn", "ADC_MsgOn", "EPS_MsgOn"}, set(members))
 		for attrs in members.values():

@@ -271,17 +271,19 @@ def namespace_attrs(name: str) -> Dict[str, str]:
 
 
 def add_node_info_struct(namespace_element: ET.Element, namespace_name: str, nodes: Sequence[str]) -> None:
+	struct_name = f"{namespace_name.lower()}_node_info"
 	struct_element = ET.SubElement(
 		namespace_element,
 		"struct",
 		{
-			"name": f"{namespace_name.lower()}_node_info",
+			"name": struct_name,
 			"isUnion": "False",
 			"definedBinaryLayout": "False",
 			"comment": "",
 		},
 	)
 
+	member_count = 0
 	for node_name in nodes:
 		ET.SubElement(
 			struct_element,
@@ -297,6 +299,25 @@ def add_node_info_struct(namespace_element: ET.Element, namespace_name: str, nod
 				bitcount=32,
 			),
 		)
+		member_count += 1
+
+	ET.SubElement(
+		namespace_element,
+		"variable",
+		{
+			"anlyzLocal": "2",
+			"readOnly": "false",
+			"valueSequence": "false",
+			"unit": "",
+			"name": f"{namespace_name}_Node_Info",
+			"comment": "",
+			"bitcount": str(member_count * 32),
+			"isSigned": "true",
+			"encoding": "65001",
+			"type": "struct",
+			"structDefinition": f"{namespace_name}::{struct_name}",
+		},
+	)
 
 
 def add_message_info_struct_and_variable(
