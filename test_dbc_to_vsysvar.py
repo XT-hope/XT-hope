@@ -135,6 +135,22 @@ class DbcToVsysvarTests(unittest.TestCase):
 		self.assertEqual("ControlCAN::media_0x23d", variable.attrib["structDefinition"])
 		self.assertEqual("512", variable.attrib["bitcount"])
 
+	def test_writes_node_info_struct_from_bu_nodes(self) -> None:
+		database = parse_dbc_text(CONTROL_DBC)
+		tree = build_vsysvar_tree([("ControlCAN", database)])
+		root = tree.getroot()
+		node_struct = root.find("./namespace/namespace[@name='ControlCAN']/struct[@name='controlcan_node_info']")
+
+		self.assertIsNotNone(node_struct)
+		members = {member.attrib["name"]: member.attrib for member in node_struct.findall("structMember")}
+		self.assertEqual({"Media_MsgOn", "ADC_MsgOn", "EPS_MsgOn"}, set(members))
+		for attrs in members.values():
+			self.assertEqual("int", attrs["type"])
+			self.assertEqual("32", attrs["bitcount"])
+			self.assertEqual("1", attrs["startValue"])
+			self.assertEqual("0", attrs["minValue"])
+			self.assertEqual("1", attrs["maxValue"])
+
 	def test_writes_multiple_dbc_namespaces_to_one_file(self) -> None:
 		with tempfile.TemporaryDirectory() as temp_dir:
 			temp_path = Path(temp_dir)

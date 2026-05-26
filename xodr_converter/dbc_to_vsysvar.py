@@ -56,6 +56,7 @@ class DbcMessage:
 
 @dataclass
 class DbcDatabase:
+	nodes: List[str]
 	messages: List[DbcMessage]
 
 
@@ -83,7 +84,10 @@ def parse_dbc_text(text: str) -> DbcDatabase:
 		strict=False,
 		sort_signals=None,
 	)
-	return DbcDatabase(messages=[convert_cantools_message(message) for message in database.messages])
+	return DbcDatabase(
+		nodes=[node.name for node in database.nodes],
+		messages=[convert_cantools_message(message) for message in database.messages],
+	)
 
 
 def convert_cantools_message(message) -> DbcMessage:
@@ -252,6 +256,7 @@ def build_vsysvar_tree(dbc_specs: Sequence[Tuple[str, DbcDatabase]]) -> ET.Eleme
 
 	for namespace_name, database in dbc_specs:
 		namespace_element = ET.SubElement(root_namespace, "namespace", namespace_attrs(namespace_name))
+		add_node_info_struct(namespace_element, namespace_name, database.nodes)
 		for message in database.messages:
 			add_message_info_struct_and_variable(namespace_element, namespace_name, message)
 			add_message_struct_and_variable(namespace_element, namespace_name, message)
@@ -263,6 +268,35 @@ def build_vsysvar_tree(dbc_specs: Sequence[Tuple[str, DbcDatabase]]) -> ET.Eleme
 
 def namespace_attrs(name: str) -> Dict[str, str]:
 	return {"name": name, "comment": "", "interface": ""}
+
+
+def add_node_info_struct(namespace_element: ET.Element, namespace_name: str, nodes: Sequence[str]) -> None:
+	struct_element = ET.SubElement(
+		namespace_element,
+		"struct",
+		{
+			"name": f"{namespace_name.lower()}_node_info",
+			"isUnion": "False",
+			"definedBinaryLayout": "False",
+			"comment": "",
+		},
+	)
+
+	for node_name in nodes:
+		ET.SubElement(
+			struct_element,
+			"structMember",
+			struct_member_attrs(
+				name=f"{node_name}_MsgOn",
+				comment="",
+				is_signed=False,
+				member_type="int",
+				start_value=Decimal("1"),
+				min_value=Decimal("0"),
+				max_value=Decimal("1"),
+				bitcount=32,
+			),
+		)
 
 
 def add_message_info_struct_and_variable(
