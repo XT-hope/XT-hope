@@ -24,6 +24,10 @@ class MessageInfo:
 	send_type_choices: List[ValueTableEntry]
 	cycle_time: Decimal
 	cycle_time_max: Optional[Decimal] = None
+	cycle_time_fast: Decimal = Decimal("0")
+	cycle_time_fast_max: Optional[Decimal] = None
+	nr_of_repetition: Decimal = Decimal("0")
+	nr_of_repetition_max: Optional[Decimal] = None
 
 
 @dataclass
@@ -111,6 +115,12 @@ def convert_cantools_message_info(message) -> MessageInfo:
 	cycle_time = get_message_attribute_value(message, "GenMsgCycleTime")
 	if cycle_time is None:
 		cycle_time = get_attribute_default_value(message, "GenMsgCycleTime")
+	cycle_time_fast = get_message_attribute_value(message, "GenMsgCycleTimeFast")
+	if cycle_time_fast is None:
+		cycle_time_fast = get_attribute_default_value(message, "GenMsgCycleTimeFast")
+	nr_of_repetition = get_message_attribute_value(message, "GenMsgNrOfRepetition")
+	if nr_of_repetition is None:
+		nr_of_repetition = get_attribute_default_value(message, "GenMsgNrOfRepetition")
 
 	return MessageInfo(
 		send_type_value=send_type_index,
@@ -118,6 +128,10 @@ def convert_cantools_message_info(message) -> MessageInfo:
 		send_type_choices=send_type_choices,
 		cycle_time=to_decimal(cycle_time, Decimal("0")),
 		cycle_time_max=get_attribute_maximum(message, "GenMsgCycleTime"),
+		cycle_time_fast=to_decimal(cycle_time_fast, Decimal("0")),
+		cycle_time_fast_max=get_attribute_maximum(message, "GenMsgCycleTimeFast"),
+		nr_of_repetition=to_decimal(nr_of_repetition, Decimal("0")),
+		nr_of_repetition_max=get_attribute_maximum(message, "GenMsgNrOfRepetition"),
 	)
 
 
@@ -399,6 +413,25 @@ def message_info_member_specs(
 				message.info.cycle_time_max,
 				[],
 			)
+		)
+	if message.info.send_type_name == "CE":
+		specs.extend(
+			[
+				(
+					f"{prefix}_MsgCycleTimeFast",
+					message.info.cycle_time_fast,
+					Decimal("0"),
+					message.info.cycle_time_fast_max,
+					[],
+				),
+				(
+					f"{prefix}_MsgNrOfRepetition",
+					message.info.nr_of_repetition,
+					Decimal("0"),
+					message.info.nr_of_repetition_max,
+					[],
+				),
+			]
 		)
 	return specs
 

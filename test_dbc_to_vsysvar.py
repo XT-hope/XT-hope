@@ -75,6 +75,10 @@ BA_DEF_ BO_ "GenMsgSendType" ENUM "Cycle", "Event", "IfActive", "CE" ,"CA", "NoM
 BA_DEF_DEF_ "GenMsgSendType" "Cycle";
 BA_DEF_ BO_ "GenMsgCycleTime" INT 0 65535;
 BA_DEF_DEF_ "GenMsgCycleTime" 10;
+BA_DEF_ BO_ "GenMsgCycleTimeFast" INT 0 65535;
+BA_DEF_DEF_ "GenMsgCycleTimeFast" 0;
+BA_DEF_ BO_ "GenMsgNrOfRepetition" INT 0 255;
+BA_DEF_DEF_ "GenMsgNrOfRepetition" 0;
 
 BO_ 567 LDA_0x237: 8 LDA
  SG_ LDA_Func_Dis_Confm_Button : 0|2@1+ (1,0) [0|3] "" ADC
@@ -82,6 +86,8 @@ BO_ 567 LDA_0x237: 8 LDA
 VAL_ 567 LDA_Func_Dis_Confm_Button 0 "Invalid" 1 "Europe" 2 "Other" 3 "Reserved";
 BA_ "GenMsgSendType" BO_ 567 3;
 BA_ "GenMsgCycleTime" BO_ 567 20;
+BA_ "GenMsgCycleTimeFast" BO_ 567 5;
+BA_ "GenMsgNrOfRepetition" BO_ 567 3;
 """
 
 
@@ -250,13 +256,15 @@ class DbcToVsysvarTests(unittest.TestCase):
 
 		self.assertIsNotNone(info_struct)
 		self.assertIsNotNone(info_variable)
-		self.assertEqual("128", info_variable.attrib["bitcount"])
+		self.assertEqual("192", info_variable.attrib["bitcount"])
 
 		members = {member.attrib["name"]: member for member in info_struct.findall("structMember")}
 		self.assertEqual("1", members["LDA_0x237_MsgOn"].attrib["startValue"])
 		self.assertEqual("0", members["LDA_0x237_MsgOff"].attrib["startValue"])
 		self.assertEqual("3", members["LDA_0x237_MsgSendType"].attrib["startValue"])
 		self.assertEqual("20", members["LDA_0x237_MsgCycleTime"].attrib["startValue"])
+		self.assertEqual("5", members["LDA_0x237_MsgCycleTimeFast"].attrib["startValue"])
+		self.assertEqual("3", members["LDA_0x237_MsgNrOfRepetition"].attrib["startValue"])
 		for member in members.values():
 			self.assertEqual("32", member.attrib["bitcount"])
 			self.assertEqual("int", member.attrib["type"])
