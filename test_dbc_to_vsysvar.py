@@ -91,6 +91,20 @@ BA_ "GenMsgNrOfRepetition" BO_ 567 3;
 """
 
 
+WIDE_RAW_DBC = """
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: MAC ADC
+
+BO_ 459 MAC_0x1CB: 8 MAC
+ SG_ CutOutMAC_1CB_S : 0|48@1+ (1,0) [0|281474976710655] "" ADC
+"""
+
+
 class DbcToVsysvarTests(unittest.TestCase):
 	def test_builds_struct_members_and_message_variable(self) -> None:
 		database = parse_dbc_text(CONTROL_DBC)
@@ -278,6 +292,20 @@ class DbcToVsysvarTests(unittest.TestCase):
 		self.assertEqual("Cycle", send_type_entries["0"])
 		self.assertEqual("CE", send_type_entries["3"])
 		self.assertEqual("CA", send_type_entries["4"])
+
+	def test_omits_int_bounds_that_exceed_canoe_int_range(self) -> None:
+		database = parse_dbc_text(WIDE_RAW_DBC)
+		tree = build_vsysvar_tree([("ControlCAN", database)])
+		root = tree.getroot()
+		member = root.find(
+			"./namespace/namespace[@name='ControlCAN']/struct[@name='mac_0x1cb']"
+			"/structMember[@name='CutOutMAC_1CB_S_Rv']"
+		)
+
+		self.assertIsNotNone(member)
+		self.assertEqual("int", member.attrib["type"])
+		self.assertEqual("0", member.attrib["minValue"])
+		self.assertNotIn("maxValue", member.attrib)
 
 	def test_parses_cli_dbc_specs(self) -> None:
 		self.assertEqual(("ControlCAN", "control.dbc"), parse_dbc_spec("ControlCAN=control.dbc"))

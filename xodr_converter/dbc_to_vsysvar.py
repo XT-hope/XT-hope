@@ -11,6 +11,10 @@ from xml.etree import ElementTree as ET
 import cantools
 
 
+INT_MIN_VALUE = Decimal("-2147483648")
+INT_MAX_VALUE = Decimal("2147483647")
+
+
 @dataclass
 class ValueTableEntry:
 	value: Decimal
@@ -526,11 +530,17 @@ def struct_member_attrs(
 		"type": member_type,
 		"startValue": decimal_to_text(start_value),
 	}
-	if min_value is not None:
+	if min_value is not None and should_write_bound(member_type, min_value):
 		attrs["minValue"] = decimal_to_text(min_value)
-	if max_value is not None:
+	if max_value is not None and should_write_bound(member_type, max_value):
 		attrs["maxValue"] = decimal_to_text(max_value)
 	return attrs
+
+
+def should_write_bound(member_type: str, value: Decimal) -> bool:
+	if member_type != "int":
+		return True
+	return INT_MIN_VALUE <= value <= INT_MAX_VALUE
 
 
 def add_value_table(
