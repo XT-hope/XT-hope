@@ -120,7 +120,14 @@ class DbcToVsysvarTests(unittest.TestCase):
 		self.assertEqual("False", struct.attrib["definedBinaryLayout"])
 
 		members = {member.attrib["name"]: member.attrib for member in struct.findall("structMember")}
-		self.assertEqual(8, len(members))
+		self.assertEqual(9, len(members))
+
+		node_member = members["Media_0x23D_node"]
+		self.assertEqual("string", node_member["type"])
+		self.assertEqual("0", node_member["bitcount"])
+		self.assertEqual("false", node_member["isSigned"])
+		self.assertEqual("65001", node_member["encoding"])
+		self.assertEqual("Media", node_member["startValue"])
 
 		pause_pv = members["PAD_AVPPauseReq_S_Pv"]
 		self.assertEqual("double", pause_pv["type"])

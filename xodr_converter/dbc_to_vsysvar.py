@@ -5,7 +5,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 from xml.etree import ElementTree as ET
 
 import cantools
@@ -455,6 +455,21 @@ def add_message_struct_and_variable(
 		},
 	)
 
+	ET.SubElement(
+		struct_element,
+		"structMember",
+		struct_member_attrs(
+			name=f"{message.name}_node",
+			comment="",
+			is_signed=False,
+			member_type="string",
+			start_value=message.sender,
+			min_value=None,
+			max_value=None,
+			bitcount=0,
+		),
+	)
+
 	bitcount = 0
 	for signal in message.signals:
 		for suffix, member_type, start_value, min_value, max_value, include_value_table in signal_member_specs(signal):
@@ -512,7 +527,7 @@ def struct_member_attrs(
 	comment: str,
 	is_signed: bool,
 	member_type: str,
-	start_value: Decimal,
+	start_value: Union[Decimal, str],
 	min_value: Optional[Decimal],
 	max_value: Optional[Decimal],
 	bitcount: int = 64,
@@ -528,13 +543,19 @@ def struct_member_attrs(
 		"isSigned": "true" if is_signed else "false",
 		"encoding": "65001",
 		"type": member_type,
-		"startValue": decimal_to_text(start_value),
+		"startValue": value_to_text(start_value),
 	}
 	if min_value is not None and should_write_bound(member_type, min_value):
 		attrs["minValue"] = decimal_to_text(min_value)
 	if max_value is not None and should_write_bound(member_type, max_value):
 		attrs["maxValue"] = decimal_to_text(max_value)
 	return attrs
+
+
+def value_to_text(value: Union[Decimal, str]) -> str:
+	if isinstance(value, Decimal):
+		return decimal_to_text(value)
+	return value
 
 
 def should_write_bound(member_type: str, value: Decimal) -> bool:
