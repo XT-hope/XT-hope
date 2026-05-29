@@ -72,6 +72,20 @@ BO_ 200 BodyStatus: 8 BCM
 """
 
 
+FRACTIONAL_BOUND_DBC = """
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: ACC ADC
+
+BO_ 201 ACC_0x0C9: 8 ACC
+ SG_ Set_Speed_S : 0|9@1+ (1,0) [0E-008|255.50000000] "" ADC
+"""
+
+
 ENUM_DBC = """
 VERSION ""
 
@@ -234,6 +248,20 @@ class DbcToVsysvarTests(unittest.TestCase):
 		self.assertEqual("int", member.attrib["type"])
 		self.assertEqual("0", member.attrib["minValue"])
 		self.assertEqual("510", member.attrib["maxValue"])
+
+	def test_uses_double_when_physical_bounds_are_fractional(self) -> None:
+		database = parse_dbc_text(FRACTIONAL_BOUND_DBC)
+		tree = build_vsysvar_tree([("ControlCAN", database)])
+		root = tree.getroot()
+		member = root.find(
+			"./namespace/namespace[@name='ControlCAN']/struct[@name='acc_0x0c9']"
+			"/structMember[@name='Set_Speed_S_Pv']"
+		)
+
+		self.assertIsNotNone(member)
+		self.assertEqual("double", member.attrib["type"])
+		self.assertEqual("0", member.attrib["minValue"])
+		self.assertEqual("255.5", member.attrib["maxValue"])
 
 	def test_reads_gb18030_encoded_chinese_comments(self) -> None:
 		with tempfile.TemporaryDirectory() as temp_dir:

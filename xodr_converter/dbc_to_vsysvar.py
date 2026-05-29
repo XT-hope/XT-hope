@@ -529,6 +529,10 @@ def should_use_int_for_physical_value(signal: DbcSignal) -> bool:
 		return False
 	if signal.factor != signal.factor.to_integral_value():
 		return False
+	if signal.minimum != signal.minimum.to_integral_value():
+		return False
+	if signal.maximum != signal.maximum.to_integral_value():
+		return False
 	return (
 		INT_MIN_VALUE <= signal.minimum <= INT_MAX_VALUE
 		and INT_MIN_VALUE <= signal.maximum <= INT_MAX_VALUE
