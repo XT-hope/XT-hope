@@ -253,19 +253,20 @@ def physical_start_value(signal: DbcSignal) -> Decimal:
 	return signal.start_raw * signal.factor + signal.offset
 
 
-def raw_range_from_physical(signal: DbcSignal) -> Tuple[Decimal, Decimal]:
+def raw_range_from_physical(signal: DbcSignal) -> Tuple[Optional[Decimal], Optional[Decimal]]:
 	if signal.factor == 0:
-		return Decimal("0"), Decimal("0")
+		return None, None
 
 	raw_a = (signal.minimum - signal.offset) / signal.factor
 	raw_b = (signal.maximum - signal.offset) / signal.factor
 	low = min(raw_a, raw_b)
 	high = max(raw_a, raw_b)
 
-	return (
-		low.to_integral_value(rounding=ROUND_CEILING),
-		high.to_integral_value(rounding=ROUND_FLOOR),
-	)
+	raw_min = low.to_integral_value(rounding=ROUND_CEILING)
+	raw_max = high.to_integral_value(rounding=ROUND_FLOOR)
+	if raw_min > raw_max:
+		return None, None
+	return raw_min, raw_max
 
 
 def build_vsysvar_tree(dbc_specs: Sequence[Tuple[str, DbcDatabase]]) -> ET.ElementTree:

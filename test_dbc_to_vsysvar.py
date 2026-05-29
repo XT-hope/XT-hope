@@ -86,6 +86,20 @@ BO_ 201 ACC_0x0C9: 8 ACC
 """
 
 
+INVALID_RAW_RANGE_DBC = """
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: VCU VCP
+
+BO_ 300 VCU_0x12C: 8 VCU
+ SG_ VCU_AX : 16|12@1+ (0.0096153846153846193878234061003240640275180339813232421875,-19.69230769230770050626233569346368312835693359375) [-19.69230769|-19.69230769] "" VCP
+"""
+
+
 ENUM_DBC = """
 VERSION ""
 
@@ -262,6 +276,21 @@ class DbcToVsysvarTests(unittest.TestCase):
 		self.assertEqual("double", member.attrib["type"])
 		self.assertEqual("0", member.attrib["minValue"])
 		self.assertEqual("255.5", member.attrib["maxValue"])
+
+	def test_omits_rv_bounds_when_physical_range_cannot_map_to_raw_integer(self) -> None:
+		database = parse_dbc_text(INVALID_RAW_RANGE_DBC)
+		tree = build_vsysvar_tree([("ControlCAN", database)])
+		root = tree.getroot()
+		member = root.find(
+			"./namespace/namespace[@name='ControlCAN']/struct[@name='vcu_0x12c']"
+			"/structMember[@name='VCU_AX_Rv']"
+		)
+
+		self.assertIsNotNone(member)
+		self.assertEqual("int", member.attrib["type"])
+		self.assertEqual("0", member.attrib["startValue"])
+		self.assertNotIn("minValue", member.attrib)
+		self.assertNotIn("maxValue", member.attrib)
 
 	def test_reads_gb18030_encoded_chinese_comments(self) -> None:
 		with tempfile.TemporaryDirectory() as temp_dir:
