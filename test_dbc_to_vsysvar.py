@@ -147,6 +147,25 @@ BO_ 459 MAC_0x1CB: 8 MAC
 """
 
 
+SPECIAL_VALUE_DBC = """
+VERSION ""
+
+NS_ :
+	VAL_
+
+BS_:
+
+BU_: MEC VCP
+
+BO_ 237 MEC_0x0ED: 8 MEC
+ SG_ Mec_Vhl_Spd : 0|12@1+ (0.1,0) [0E-008|102.20000000] "" VCP
+ SG_ Mec_WhlSpd_FL_Pad : 16|8@1+ (1,0) [0E-008|254.00000000] "" VCP
+
+VAL_ 237 Mec_Vhl_Spd 1023 "Invalid" 1024 "Error";
+VAL_ 237 Mec_WhlSpd_FL_Pad 255 "Invalid";
+"""
+
+
 class DbcToVsysvarTests(unittest.TestCase):
 	def test_builds_struct_members_and_message_variable(self) -> None:
 		database = parse_dbc_text(CONTROL_DBC)
@@ -352,6 +371,41 @@ class DbcToVsysvarTests(unittest.TestCase):
 			},
 			entries,
 		)
+
+	def test_writes_special_value_members_for_out_of_range_choices(self) -> None:
+		database = parse_dbc_text(SPECIAL_VALUE_DBC)
+		tree = build_vsysvar_tree([("ControlCAN", database)])
+		root = tree.getroot()
+		struct = root.find("./namespace/namespace[@name='ControlCAN']/struct[@name='mec_0x0ed']")
+		self.assertIsNotNone(struct)
+
+		members = {member.attrib["name"]: member for member in struct.findall("structMember")}
+		pv_member = members["Mec_Vhl_Spd_Pv"]
+		rv_member = members["Mec_Vhl_Spd_Rv"]
+		has_special = members["Mec_Vhl_Spd_has_special_value"]
+		special_value = members["Mec_Vhl_Spd_special_value"]
+
+		self.assertEqual("double", pv_member.attrib["type"])
+		self.assertIsNone(pv_member.find("./valuetable"))
+		self.assertEqual("1022", rv_member.attrib["maxValue"])
+		self.assertIsNone(rv_member.find("./valuetable"))
+		self.assertEqual("0", has_special.attrib["startValue"])
+		self.assertEqual("0", has_special.attrib["minValue"])
+		self.assertEqual("1", has_special.attrib["maxValue"])
+		has_special_entries = {
+			entry.attrib["value"]: entry.attrib["displayString"]
+			for entry in has_special.findall("./valuetable/valuetableentry")
+		}
+		self.assertEqual({"0": "no", "1": "yes"}, has_special_entries)
+
+		self.assertEqual("1023", special_value.attrib["startValue"])
+		self.assertNotIn("minValue", special_value.attrib)
+		self.assertNotIn("maxValue", special_value.attrib)
+		special_entries = {
+			entry.attrib["value"]: entry.attrib["displayString"]
+			for entry in special_value.findall("./valuetable[@name='Mec_Vhl_Spd_special_valueVt']/valuetableentry")
+		}
+		self.assertEqual({"1023": "Invalid", "1024": "Error"}, special_entries)
 
 	def test_writes_message_info_struct_from_message_attributes(self) -> None:
 		database = parse_dbc_text(ENUM_DBC)

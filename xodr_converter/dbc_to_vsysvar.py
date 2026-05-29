@@ -473,6 +473,8 @@ def add_message_struct_and_variable(
 
 	bitcount = 0
 	for signal in message.signals:
+		normal_choices = normal_value_table_choices(signal)
+		special_choices = special_value_table_choices(signal)
 		for suffix, member_type, start_value, min_value, max_value, include_value_table in signal_member_specs(signal):
 			member_element = ET.SubElement(
 				struct_element,
@@ -487,9 +489,12 @@ def add_message_struct_and_variable(
 					max_value=max_value,
 				),
 			)
-			if include_value_table and signal.choices:
-				add_value_table(member_element, f"{signal.name}Vt", signal.choices)
+			if include_value_table and normal_choices:
+				add_value_table(member_element, f"{signal.name}Vt", normal_choices)
 			bitcount += 64
+		if special_choices:
+			add_special_value_members(struct_element, signal, special_choices)
+			bitcount += 128
 
 	ET.SubElement(
 		namespace_element,
@@ -510,6 +515,47 @@ def add_message_struct_and_variable(
 	)
 
 
+def add_special_value_members(
+	struct_element: ET.Element, signal: DbcSignal, special_choices: List[ValueTableEntry]
+) -> None:
+	has_special_member = ET.SubElement(
+		struct_element,
+		"structMember",
+		struct_member_attrs(
+			name=f"{signal.name}_has_special_value",
+			comment="",
+			is_signed=False,
+			member_type="int",
+			start_value=Decimal("0"),
+			min_value=Decimal("0"),
+			max_value=Decimal("1"),
+		),
+	)
+	add_value_table(
+		has_special_member,
+		f"{signal.name}_has_special_valueVt",
+		[
+			ValueTableEntry(Decimal("0"), "no"),
+			ValueTableEntry(Decimal("1"), "yes"),
+		],
+	)
+
+	special_value_member = ET.SubElement(
+		struct_element,
+		"structMember",
+		struct_member_attrs(
+			name=f"{signal.name}_special_value",
+			comment="",
+			is_signed=signal.is_signed,
+			member_type="int",
+			start_value=special_choices[0].value,
+			min_value=None,
+			max_value=None,
+		),
+	)
+	add_value_table(special_value_member, f"{signal.name}_special_valueVt", special_choices)
+
+
 def signal_member_specs(
 	signal: DbcSignal,
 ) -> Iterable[Tuple[str, str, Decimal, Optional[Decimal], Optional[Decimal], bool]]:
@@ -524,7 +570,7 @@ def signal_member_specs(
 
 
 def should_use_int_for_physical_value(signal: DbcSignal) -> bool:
-	if signal.choices:
+	if normal_value_table_choices(signal):
 		return True
 	if signal.offset != 0:
 		return False
@@ -538,6 +584,20 @@ def should_use_int_for_physical_value(signal: DbcSignal) -> bool:
 		INT_MIN_VALUE <= signal.minimum <= INT_MAX_VALUE
 		and INT_MIN_VALUE <= signal.maximum <= INT_MAX_VALUE
 	)
+
+
+def normal_value_table_choices(signal: DbcSignal) -> List[ValueTableEntry]:
+	raw_min, raw_max = raw_range_from_physical(signal)
+	if raw_min is None or raw_max is None:
+		return signal.choices
+	return [entry for entry in signal.choices if raw_min <= entry.value <= raw_max]
+
+
+def special_value_table_choices(signal: DbcSignal) -> List[ValueTableEntry]:
+	raw_min, raw_max = raw_range_from_physical(signal)
+	if raw_min is None or raw_max is None:
+		return []
+	return [entry for entry in signal.choices if entry.value < raw_min or entry.value > raw_max]
 
 
 def struct_member_attrs(
