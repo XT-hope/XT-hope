@@ -513,12 +513,25 @@ def signal_member_specs(
 	signal: DbcSignal,
 ) -> Iterable[Tuple[str, str, Decimal, Optional[Decimal], Optional[Decimal], bool]]:
 	raw_min, raw_max = raw_range_from_physical(signal)
-	value_member_type = "int" if signal.choices else "double"
+	value_member_type = "int" if should_use_int_for_physical_value(signal) else "double"
 	return (
 		("Pv", value_member_type, physical_start_value(signal), signal.minimum, signal.maximum, True),
 		("Rv", "int", signal.start_raw, raw_min, raw_max, True),
 		("Factor", "double", signal.factor, None, None, False),
 		("Offset", "double", signal.offset, None, None, False),
+	)
+
+
+def should_use_int_for_physical_value(signal: DbcSignal) -> bool:
+	if signal.choices:
+		return True
+	if signal.offset != 0:
+		return False
+	if signal.factor != signal.factor.to_integral_value():
+		return False
+	return (
+		INT_MIN_VALUE <= signal.minimum <= INT_MAX_VALUE
+		and INT_MIN_VALUE <= signal.maximum <= INT_MAX_VALUE
 	)
 
 

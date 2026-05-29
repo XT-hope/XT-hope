@@ -58,6 +58,20 @@ BA_ "GenSigStartValue" SG_ 100 VehicleSpeed 1234;
 """
 
 
+INTEGER_PHYSICAL_DBC = """
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: BCM ADC
+
+BO_ 200 BodyStatus: 8 BCM
+ SG_ DoorStep : 0|8@1+ (2,0) [0|510] "" ADC
+"""
+
+
 ENUM_DBC = """
 VERSION ""
 
@@ -130,7 +144,7 @@ class DbcToVsysvarTests(unittest.TestCase):
 		self.assertEqual("Media", node_member["startValue"])
 
 		pause_pv = members["PAD_AVPPauseReq_S_Pv"]
-		self.assertEqual("double", pause_pv["type"])
+		self.assertEqual("int", pause_pv["type"])
 		self.assertEqual("false", pause_pv["isSigned"])
 		self.assertEqual("0", pause_pv["startValue"])
 		self.assertEqual("0", pause_pv["minValue"])
@@ -206,6 +220,20 @@ class DbcToVsysvarTests(unittest.TestCase):
 			self.assertIsNotNone(
 				root.find("./namespace/namespace[@name='ChassisCAN']/variable[@name='VehicleStatus']")
 			)
+
+	def test_uses_int_for_integral_physical_values_in_int_range(self) -> None:
+		database = parse_dbc_text(INTEGER_PHYSICAL_DBC)
+		tree = build_vsysvar_tree([("BodyCAN", database)])
+		root = tree.getroot()
+		member = root.find(
+			"./namespace/namespace[@name='BodyCAN']/struct[@name='bodystatus']"
+			"/structMember[@name='DoorStep_Pv']"
+		)
+
+		self.assertIsNotNone(member)
+		self.assertEqual("int", member.attrib["type"])
+		self.assertEqual("0", member.attrib["minValue"])
+		self.assertEqual("510", member.attrib["maxValue"])
 
 	def test_reads_gb18030_encoded_chinese_comments(self) -> None:
 		with tempfile.TemporaryDirectory() as temp_dir:
@@ -304,11 +332,17 @@ class DbcToVsysvarTests(unittest.TestCase):
 		database = parse_dbc_text(WIDE_RAW_DBC)
 		tree = build_vsysvar_tree([("ControlCAN", database)])
 		root = tree.getroot()
+		pv_member = root.find(
+			"./namespace/namespace[@name='ControlCAN']/struct[@name='mac_0x1cb']"
+			"/structMember[@name='CutOutMAC_1CB_S_Pv']"
+		)
 		member = root.find(
 			"./namespace/namespace[@name='ControlCAN']/struct[@name='mac_0x1cb']"
 			"/structMember[@name='CutOutMAC_1CB_S_Rv']"
 		)
 
+		self.assertIsNotNone(pv_member)
+		self.assertEqual("double", pv_member.attrib["type"])
 		self.assertIsNotNone(member)
 		self.assertEqual("int", member.attrib["type"])
 		self.assertEqual("0", member.attrib["minValue"])
