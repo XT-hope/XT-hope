@@ -388,13 +388,14 @@ class DbcToVsysvarTests(unittest.TestCase):
 		pv_member = members["Mec_Vhl_Spd_Pv"]
 		rv_member = members["Mec_Vhl_Spd_Rv"]
 		has_special = members["Mec_Vhl_Spd_has_special_value"]
+		use_special = members["Mec_Vhl_Spd_use_special_value"]
 		special_value = members["Mec_Vhl_Spd_special_value"]
 
 		self.assertEqual("double", pv_member.attrib["type"])
 		self.assertIsNone(pv_member.find("./valuetable"))
 		self.assertEqual("1022", rv_member.attrib["maxValue"])
 		self.assertIsNone(rv_member.find("./valuetable"))
-		self.assertEqual("0", has_special.attrib["startValue"])
+		self.assertEqual("1", has_special.attrib["startValue"])
 		self.assertEqual("0", has_special.attrib["minValue"])
 		self.assertEqual("1", has_special.attrib["maxValue"])
 		has_special_entries = {
@@ -402,6 +403,15 @@ class DbcToVsysvarTests(unittest.TestCase):
 			for entry in has_special.findall("./valuetable/valuetableentry")
 		}
 		self.assertEqual({"0": "no", "1": "yes"}, has_special_entries)
+
+		self.assertEqual("0", use_special.attrib["startValue"])
+		self.assertEqual("0", use_special.attrib["minValue"])
+		self.assertEqual("1", use_special.attrib["maxValue"])
+		use_special_entries = {
+			entry.attrib["value"]: entry.attrib["displayString"]
+			for entry in use_special.findall("./valuetable/valuetableentry")
+		}
+		self.assertEqual({"0": "not use", "1": "use"}, use_special_entries)
 
 		self.assertEqual("1023", special_value.attrib["startValue"])
 		self.assertNotIn("minValue", special_value.attrib)

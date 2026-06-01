@@ -492,11 +492,12 @@ def add_message_struct_and_variable(
 			if include_value_table and normal_choices:
 				add_value_table(member_element, f"{signal.name}Vt", normal_choices)
 			bitcount += 64
-		add_has_special_value_member(struct_element, signal)
+		add_has_special_value_member(struct_element, signal, has_special_value=bool(special_choices))
 		bitcount += 64
 		if special_choices:
+			add_use_special_value_member(struct_element, signal)
 			add_special_value_member(struct_element, signal, special_choices)
-			bitcount += 64
+			bitcount += 128
 
 	ET.SubElement(
 		namespace_element,
@@ -517,7 +518,9 @@ def add_message_struct_and_variable(
 	)
 
 
-def add_has_special_value_member(struct_element: ET.Element, signal: DbcSignal) -> None:
+def add_has_special_value_member(
+	struct_element: ET.Element, signal: DbcSignal, has_special_value: bool
+) -> None:
 	has_special_member = ET.SubElement(
 		struct_element,
 		"structMember",
@@ -526,7 +529,7 @@ def add_has_special_value_member(struct_element: ET.Element, signal: DbcSignal) 
 			comment="",
 			is_signed=False,
 			member_type="int",
-			start_value=Decimal("0"),
+			start_value=Decimal("1") if has_special_value else Decimal("0"),
 			min_value=Decimal("0"),
 			max_value=Decimal("1"),
 		),
@@ -537,6 +540,30 @@ def add_has_special_value_member(struct_element: ET.Element, signal: DbcSignal) 
 		[
 			ValueTableEntry(Decimal("0"), "no"),
 			ValueTableEntry(Decimal("1"), "yes"),
+		],
+	)
+
+
+def add_use_special_value_member(struct_element: ET.Element, signal: DbcSignal) -> None:
+	use_special_member = ET.SubElement(
+		struct_element,
+		"structMember",
+		struct_member_attrs(
+			name=f"{signal.name}_use_special_value",
+			comment="",
+			is_signed=False,
+			member_type="int",
+			start_value=Decimal("0"),
+			min_value=Decimal("0"),
+			max_value=Decimal("1"),
+		),
+	)
+	add_value_table(
+		use_special_member,
+		f"{signal.name}_use_special_valueVt",
+		[
+			ValueTableEntry(Decimal("0"), "not use"),
+			ValueTableEntry(Decimal("1"), "use"),
 		],
 	)
 
