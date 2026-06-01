@@ -166,6 +166,40 @@ VAL_ 237 Mec_WhlSpd_FL_Pad 255 "Invalid";
 """
 
 
+NORMAL_VAL_NON_INT_PHYSICAL_DBC = """
+VERSION ""
+
+NS_ :
+	VAL_
+
+BS_:
+
+BU_: LMS VCP
+
+BO_ 1173 LMS_0x495: 64 LMS
+ SG_ LMS_Energy_Recovery_Quantity_Todata_S : 152|20@1+ (0.1,0) [0E-008|99999.90000000] "KWh" VCP
+
+VAL_ 1173 LMS_Energy_Recovery_Quantity_Todata_S 0 "Invalid" 1 "Close" 2 "On" 3 "Enable";
+"""
+
+
+PHYSICAL_VALUETABLE_DBC = """
+VERSION ""
+
+NS_ :
+	VAL_
+
+BS_:
+
+BU_: BCM ADC
+
+BO_ 302 BCM_0x12E: 8 BCM
+ SG_ StepMode : 0|2@1+ (2,0) [0|6] "" ADC
+
+VAL_ 302 StepMode 0 "Zero" 1 "Two" 2 "Four" 3 "Six";
+"""
+
+
 INACTIVE_VALUE_DBC = """
 VERSION ""
 
@@ -400,6 +434,67 @@ class DbcToVsysvarTests(unittest.TestCase):
 			},
 			entries,
 		)
+		pv_value_table = pv_member.find("./valuetable[@name='LDA_Func_Dis_Confm_ButtonVt']")
+		self.assertIsNotNone(pv_value_table)
+		pv_entries = {
+			entry.attrib["value"]: entry.attrib["displayString"]
+			for entry in pv_value_table.findall("valuetableentry")
+		}
+		self.assertEqual(entries, pv_entries)
+
+	def test_pv_omits_valuetable_when_physical_type_is_double(self) -> None:
+		database = parse_dbc_text(NORMAL_VAL_NON_INT_PHYSICAL_DBC)
+		tree = build_vsysvar_tree([("ControlCAN", database)])
+		root = tree.getroot()
+		pv_member = root.find(
+			"./namespace/namespace[@name='ControlCAN']/struct[@name='lms_0x495']"
+			"/structMember[@name='LMS_Energy_Recovery_Quantity_Todata_S_Pv']"
+		)
+		rv_member = root.find(
+			"./namespace/namespace[@name='ControlCAN']/struct[@name='lms_0x495']"
+			"/structMember[@name='LMS_Energy_Recovery_Quantity_Todata_S_Rv']"
+		)
+
+		self.assertIsNotNone(pv_member)
+		self.assertEqual("double", pv_member.attrib["type"])
+		self.assertEqual("99999.9", pv_member.attrib["maxValue"])
+		self.assertIsNone(pv_member.find("./valuetable"))
+		self.assertIsNotNone(rv_member)
+		rv_entries = {
+			entry.attrib["value"]: entry.attrib["displayString"]
+			for entry in rv_member.findall("./valuetable[@name='LMS_Energy_Recovery_Quantity_Todata_SVt']/valuetableentry")
+		}
+		self.assertEqual(
+			{"0": "Invalid", "1": "Close", "2": "On", "3": "Enable"},
+			rv_entries,
+		)
+
+	def test_pv_valuetable_values_are_physical_when_type_is_int(self) -> None:
+		database = parse_dbc_text(PHYSICAL_VALUETABLE_DBC)
+		tree = build_vsysvar_tree([("BodyCAN", database)])
+		root = tree.getroot()
+		pv_member = root.find(
+			"./namespace/namespace[@name='BodyCAN']/struct[@name='bcm_0x12e']"
+			"/structMember[@name='StepMode_Pv']"
+		)
+		rv_member = root.find(
+			"./namespace/namespace[@name='BodyCAN']/struct[@name='bcm_0x12e']"
+			"/structMember[@name='StepMode_Rv']"
+		)
+
+		self.assertIsNotNone(pv_member)
+		self.assertEqual("int", pv_member.attrib["type"])
+		pv_entries = {
+			entry.attrib["value"]: entry.attrib["displayString"]
+			for entry in pv_member.findall("./valuetable[@name='StepModeVt']/valuetableentry")
+		}
+		self.assertEqual({"0": "Zero", "2": "Two", "4": "Four", "6": "Six"}, pv_entries)
+		self.assertIsNotNone(rv_member)
+		rv_entries = {
+			entry.attrib["value"]: entry.attrib["displayString"]
+			for entry in rv_member.findall("./valuetable[@name='StepModeVt']/valuetableentry")
+		}
+		self.assertEqual({"0": "Zero", "1": "Two", "2": "Four", "3": "Six"}, rv_entries)
 
 	def test_writes_special_value_members_for_out_of_range_choices(self) -> None:
 		database = parse_dbc_text(SPECIAL_VALUE_DBC)

@@ -496,8 +496,9 @@ def add_message_struct_and_variable(
 					max_value=max_value,
 				),
 			)
-			if include_value_table and normal_choices:
-				add_value_table(member_element, f"{signal.name}Vt", normal_choices)
+			value_table_entries = member_value_table_entries(signal, suffix, member_type, normal_choices)
+			if include_value_table and value_table_entries:
+				add_value_table(member_element, f"{signal.name}Vt", value_table_entries)
 			bitcount += 64
 		add_has_special_value_member(struct_element, signal, has_special_value=bool(special_choices))
 		bitcount += 64
@@ -684,8 +685,6 @@ def signal_member_specs(
 
 
 def should_use_int_for_physical_value(signal: DbcSignal) -> bool:
-	if normal_value_table_choices(signal):
-		return True
 	if signal.offset != 0:
 		return False
 	if signal.factor != signal.factor.to_integral_value():
@@ -697,7 +696,41 @@ def should_use_int_for_physical_value(signal: DbcSignal) -> bool:
 	return (
 		INT_MIN_VALUE <= signal.minimum <= INT_MAX_VALUE
 		and INT_MIN_VALUE <= signal.maximum <= INT_MAX_VALUE
+		and all(
+			is_integral_decimal(raw_to_physical_value(signal, entry.value))
+			for entry in normal_value_table_choices(signal)
+		)
 	)
+
+
+def member_value_table_entries(
+	signal: DbcSignal,
+	suffix: str,
+	member_type: str,
+	normal_choices: List[ValueTableEntry],
+) -> List[ValueTableEntry]:
+	if suffix == "Rv":
+		return normal_choices
+	if suffix == "Pv" and member_type == "int":
+		return physical_value_table_choices(signal, normal_choices)
+	return []
+
+
+def physical_value_table_choices(
+	signal: DbcSignal, choices: List[ValueTableEntry]
+) -> List[ValueTableEntry]:
+	return [
+		ValueTableEntry(raw_to_physical_value(signal, entry.value), entry.description)
+		for entry in choices
+	]
+
+
+def raw_to_physical_value(signal: DbcSignal, raw_value: Decimal) -> Decimal:
+	return raw_value * signal.factor + signal.offset
+
+
+def is_integral_decimal(value: Decimal) -> bool:
+	return value == value.to_integral_value()
 
 
 def normal_value_table_choices(signal: DbcSignal) -> List[ValueTableEntry]:
