@@ -492,9 +492,11 @@ def add_message_struct_and_variable(
 			if include_value_table and normal_choices:
 				add_value_table(member_element, f"{signal.name}Vt", normal_choices)
 			bitcount += 64
+		add_has_special_value_member(struct_element, signal)
+		bitcount += 64
 		if special_choices:
-			add_special_value_members(struct_element, signal, special_choices)
-			bitcount += 128
+			add_special_value_member(struct_element, signal, special_choices)
+			bitcount += 64
 
 	ET.SubElement(
 		namespace_element,
@@ -515,9 +517,7 @@ def add_message_struct_and_variable(
 	)
 
 
-def add_special_value_members(
-	struct_element: ET.Element, signal: DbcSignal, special_choices: List[ValueTableEntry]
-) -> None:
+def add_has_special_value_member(struct_element: ET.Element, signal: DbcSignal) -> None:
 	has_special_member = ET.SubElement(
 		struct_element,
 		"structMember",
@@ -540,6 +540,10 @@ def add_special_value_members(
 		],
 	)
 
+
+def add_special_value_member(
+	struct_element: ET.Element, signal: DbcSignal, special_choices: List[ValueTableEntry]
+) -> None:
 	special_value_member = ET.SubElement(
 		struct_element,
 		"structMember",
