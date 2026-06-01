@@ -405,6 +405,12 @@ class DbcToVsysvarTests(unittest.TestCase):
 
 		self.assertIn('CM_ SG_ 573 PAD_AVPPauseReq_S "用户暂停";', text)
 
+	def test_decode_replaces_invalid_bytes_for_requested_encoding(self) -> None:
+		text = decode_dbc_bytes(b'CM_ SG_ 1 Signal "\xbd";', preferred_encoding="gb18030")
+
+		self.assertIn("CM_ SG_ 1 Signal", text)
+		self.assertIn("\ufffd", text)
+
 	def test_writes_signal_value_table_from_val_definitions(self) -> None:
 		database = parse_dbc_text(ENUM_DBC)
 		tree = build_vsysvar_tree([("ControlCAN", database)])

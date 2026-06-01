@@ -79,7 +79,7 @@ def read_text_file(path: str, encoding: Optional[str] = None) -> str:
 
 def decode_dbc_bytes(data: bytes, preferred_encoding: Optional[str] = None) -> str:
 	encoding = preferred_encoding or "utf-8-sig"
-	return data.decode(encoding)
+	return data.decode(encoding, errors="replace")
 
 
 def parse_dbc_file(path: str, encoding: Optional[str] = None) -> DbcDatabase:
