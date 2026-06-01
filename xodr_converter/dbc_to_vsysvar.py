@@ -50,6 +50,7 @@ class DbcSignal:
 	comment: str = ""
 	start_raw: Decimal = Decimal("0")
 	choices: List[ValueTableEntry] = field(default_factory=list)
+	inactive_raw: Optional[Decimal] = None
 
 
 @dataclass
@@ -155,6 +156,7 @@ def convert_cantools_signal(signal) -> DbcSignal:
 		comment=signal.comment or "",
 		start_raw=to_decimal(signal.raw_initial, Decimal("0")),
 		choices=convert_cantools_choices(signal.choices),
+		inactive_raw=to_optional_decimal(get_signal_attribute_value(signal, "GenSigInactiveValue")),
 	)
 
 
@@ -182,6 +184,11 @@ def default_send_type_choices() -> List[ValueTableEntry]:
 
 def get_message_attribute_value(message, name: str):
 	attribute = getattr(message.dbc, "_attributes", {}).get(name) if message.dbc else None
+	return getattr(attribute, "value", None) if attribute is not None else None
+
+
+def get_signal_attribute_value(signal, name: str):
+	attribute = getattr(signal.dbc, "_attributes", {}).get(name) if signal.dbc else None
 	return getattr(attribute, "value", None) if attribute is not None else None
 
 
@@ -498,6 +505,12 @@ def add_message_struct_and_variable(
 			add_use_special_value_member(struct_element, signal)
 			add_special_value_member(struct_element, signal, special_choices)
 			bitcount += 128
+		add_has_inactive_value_member(struct_element, signal)
+		bitcount += 64
+		if signal.inactive_raw is not None:
+			add_use_inactive_value_member(struct_element, signal)
+			add_inactive_value_member(struct_element, signal)
+			bitcount += 128
 
 	ET.SubElement(
 		namespace_element,
@@ -585,6 +598,76 @@ def add_special_value_member(
 		),
 	)
 	add_value_table(special_value_member, f"{signal.name}_special_valueVt", special_choices)
+
+
+def add_has_inactive_value_member(struct_element: ET.Element, signal: DbcSignal) -> None:
+	has_inactive_member = ET.SubElement(
+		struct_element,
+		"structMember",
+		struct_member_attrs(
+			name=f"{signal.name}_has_inactive_value",
+			comment="",
+			is_signed=False,
+			member_type="int",
+			start_value=Decimal("1") if signal.inactive_raw is not None else Decimal("0"),
+			min_value=Decimal("0"),
+			max_value=Decimal("1"),
+		),
+	)
+	add_value_table(
+		has_inactive_member,
+		f"{signal.name}_has_inactive_valueVt",
+		[
+			ValueTableEntry(Decimal("0"), "no"),
+			ValueTableEntry(Decimal("1"), "yes"),
+		],
+	)
+
+
+def add_use_inactive_value_member(struct_element: ET.Element, signal: DbcSignal) -> None:
+	use_inactive_member = ET.SubElement(
+		struct_element,
+		"structMember",
+		struct_member_attrs(
+			name=f"{signal.name}_use_inactive_value",
+			comment="",
+			is_signed=False,
+			member_type="int",
+			start_value=Decimal("0"),
+			min_value=Decimal("0"),
+			max_value=Decimal("1"),
+		),
+	)
+	add_value_table(
+		use_inactive_member,
+		f"{signal.name}_use_inactive_valueVt",
+		[
+			ValueTableEntry(Decimal("0"), "not use"),
+			ValueTableEntry(Decimal("1"), "use"),
+		],
+	)
+
+
+def add_inactive_value_member(struct_element: ET.Element, signal: DbcSignal) -> None:
+	inactive_raw = signal.inactive_raw if signal.inactive_raw is not None else Decimal("0")
+	inactive_value_member = ET.SubElement(
+		struct_element,
+		"structMember",
+		struct_member_attrs(
+			name=f"{signal.name}_inactive_value",
+			comment="",
+			is_signed=signal.is_signed,
+			member_type="int",
+			start_value=inactive_raw,
+			min_value=None,
+			max_value=None,
+		),
+	)
+	add_value_table(
+		inactive_value_member,
+		f"{signal.name}_inactive_valueVt",
+		[ValueTableEntry(inactive_raw, "inactive")],
+	)
 
 
 def signal_member_specs(
