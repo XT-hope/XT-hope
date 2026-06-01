@@ -186,6 +186,21 @@ BA_ "GenSigInactiveValue" SG_ 301 BCM_Mode 7;
 """
 
 
+MULTIPLEXED_DBC = """
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: LMS VCP
+
+BO_ 500 LMS_0x1F4: 64 LMS
+ SG_ LMS_Mux M : 0|8@1+ (1,0) [0|255] "" VCP
+ SG_ LMS_Energy_Recovery_Quantity_Todata_S m64 : 152|20@1+ (0.1000000000000000055511151231257827021181583404541015625,0) [0E-008|99999.90000000] "KWh" VCP
+"""
+
+
 class DbcToVsysvarTests(unittest.TestCase):
 	def test_builds_struct_members_and_message_variable(self) -> None:
 		database = parse_dbc_text(CONTROL_DBC)
@@ -478,6 +493,20 @@ class DbcToVsysvarTests(unittest.TestCase):
 			for entry in inactive_value.findall("./valuetable[@name='BCM_Mode_inactive_valueVt']/valuetableentry")
 		}
 		self.assertEqual({"7": "inactive"}, inactive_entries)
+
+	def test_adds_multiplexer_id_suffix_to_signal_members(self) -> None:
+		database = parse_dbc_text(MULTIPLEXED_DBC)
+		tree = build_vsysvar_tree([("ControlCAN", database)])
+		root = tree.getroot()
+		struct = root.find("./namespace/namespace[@name='ControlCAN']/struct[@name='lms_0x1f4']")
+		self.assertIsNotNone(struct)
+
+		members = {member.attrib["name"]: member.attrib for member in struct.findall("structMember")}
+		self.assertIn("LMS_Energy_Recovery_Quantity_Todata_S_m64_Pv", members)
+		self.assertIn("LMS_Energy_Recovery_Quantity_Todata_S_m64_Rv", members)
+		self.assertIn("LMS_Energy_Recovery_Quantity_Todata_S_m64_has_special_value", members)
+		self.assertIn("LMS_Energy_Recovery_Quantity_Todata_S_m64_has_inactive_value", members)
+		self.assertNotIn("LMS_Energy_Recovery_Quantity_Todata_S_Pv", members)
 
 	def test_writes_message_info_struct_from_message_attributes(self) -> None:
 		database = parse_dbc_text(ENUM_DBC)
