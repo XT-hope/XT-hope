@@ -235,7 +235,7 @@ class DbcToVsysvarTests(unittest.TestCase):
 		self.assertEqual("False", struct.attrib["definedBinaryLayout"])
 
 		members = {member.attrib["name"]: member.attrib for member in struct.findall("structMember")}
-		self.assertEqual(13, len(members))
+		self.assertEqual(17, len(members))
 
 		node_member = members["Media_0x23D_node"]
 		self.assertEqual("string", node_member["type"])
@@ -274,17 +274,23 @@ class DbcToVsysvarTests(unittest.TestCase):
 		pause_has_special = members["PAD_AVPPauseReq_S_has_special_value"]
 		self.assertEqual("int", pause_has_special["type"])
 		self.assertEqual("0", pause_has_special["startValue"])
+		pause_use_special = members["PAD_AVPPauseReq_S_use_special_value"]
+		self.assertEqual("int", pause_use_special["type"])
+		self.assertEqual("0", pause_use_special["startValue"])
 		self.assertNotIn("PAD_AVPPauseReq_S_special_value", members)
 		pause_has_inactive = members["PAD_AVPPauseReq_S_has_inactive_value"]
 		self.assertEqual("int", pause_has_inactive["type"])
 		self.assertEqual("0", pause_has_inactive["startValue"])
+		pause_use_inactive = members["PAD_AVPPauseReq_S_use_inactive_value"]
+		self.assertEqual("int", pause_use_inactive["type"])
+		self.assertEqual("0", pause_use_inactive["startValue"])
 		self.assertNotIn("PAD_AVPPauseReq_S_inactive_value", members)
 
 		variable = namespace.find("./variable[@name='Media_0x23D']")
 		self.assertIsNotNone(variable)
 		self.assertEqual("struct", variable.attrib["type"])
 		self.assertEqual("ControlCAN::media_0x23d", variable.attrib["structDefinition"])
-		self.assertEqual("768", variable.attrib["bitcount"])
+		self.assertEqual("1024", variable.attrib["bitcount"])
 
 	def test_writes_node_info_struct_from_bu_nodes(self) -> None:
 		database = parse_dbc_text(CONTROL_DBC)

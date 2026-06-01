@@ -502,16 +502,18 @@ def add_message_struct_and_variable(
 			bitcount += 64
 		add_has_special_value_member(struct_element, signal, has_special_value=bool(special_choices))
 		bitcount += 64
+		add_use_special_value_member(struct_element, signal)
+		bitcount += 64
 		if special_choices:
-			add_use_special_value_member(struct_element, signal)
 			add_special_value_member(struct_element, signal, special_choices)
-			bitcount += 128
+			bitcount += 64
 		add_has_inactive_value_member(struct_element, signal)
 		bitcount += 64
+		add_use_inactive_value_member(struct_element, signal)
+		bitcount += 64
 		if signal.inactive_raw is not None:
-			add_use_inactive_value_member(struct_element, signal)
 			add_inactive_value_member(struct_element, signal)
-			bitcount += 128
+			bitcount += 64
 
 	ET.SubElement(
 		namespace_element,
