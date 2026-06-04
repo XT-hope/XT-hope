@@ -23,7 +23,14 @@ SYSVAR_XML = """<?xml version="1.0" encoding="utf-8"?>
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="VehicleSpeed_use_special_value" comment="" bitcount="64" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="VehicleSpeed_use_inactive_value" comment="" bitcount="64" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
       </struct>
+      <struct name="eps_0x06d" isUnion="False" definedBinaryLayout="False" comment="">
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="SteerAngle_Rv" comment="" bitcount="64" isSigned="true" encoding="65001" type="int" startValue="0" minValue="-7200" maxValue="7200" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="SteerAngle_Pv" comment="" bitcount="64" isSigned="true" encoding="65001" type="double" startValue="0" minValue="-720" maxValue="720" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="SteerAngle_use_special_value" comment="" bitcount="64" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="SteerAngle_use_inactive_value" comment="" bitcount="64" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
+      </struct>
       <variable anlyzLocal="2" readOnly="false" valueSequence="false" unit="" name="IPB_0x10C" comment="" bitcount="256" isSigned="true" encoding="65001" type="struct" structDefinition="control::ipb_0x10c" />
+      <variable anlyzLocal="2" readOnly="false" valueSequence="false" unit="" name="EPS_0x06D" comment="" bitcount="256" isSigned="true" encoding="65001" type="struct" structDefinition="control::eps_0x06d" />
       <variable anlyzLocal="2" readOnly="false" valueSequence="false" unit="" name="IPB_0x10C_Info" comment="" bitcount="128" isSigned="true" encoding="65001" type="struct" structDefinition="control::ipb_0x10c_info" />
     </namespace>
   </namespace>
@@ -37,12 +44,16 @@ class XvpGeneratorTests(unittest.TestCase):
 			sysvar_path = Path(temp_dir) / "demo.vsysvar"
 			sysvar_path.write_text(SYSVAR_XML, encoding="utf-8")
 
-			output_path = generation_xvp(
+			output_paths = generation_xvp(
 				str(sysvar_path),
-				{"control": ["IPB_0x10C"]},
+				{"control": ["IPB_0x10C", "EPS_0x06D"]},
 				temp_dir,
 			)
 
+			self.assertEqual(2, len(output_paths))
+			self.assertTrue(any(path.endswith("demo_control_IPB_0x10C_panel.xvp") for path in output_paths))
+			self.assertTrue(any(path.endswith("demo_control_EPS_0x06D_panel.xvp") for path in output_paths))
+			output_path = next(path for path in output_paths if path.endswith("demo_control_IPB_0x10C_panel.xvp"))
 			self.assertTrue(Path(output_path).exists())
 			root = ET.parse(output_path).getroot()
 			self.assertEqual("Panel", root.tag)

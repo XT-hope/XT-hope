@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,7 +44,7 @@ class SignalRow:
 	use_inactive_member: Optional[StructMemberInfo] = None
 
 
-def generation_xvp(sysvar_path: str, selected_variables: Dict[str, List[str]], output_dir: str) -> str:
+def generation_xvp(sysvar_path: str, selected_variables: Dict[str, List[str]], output_dir: str) -> List[str]:
 	"""
 	生成 CANoe 面板文件(.xvp)。
 
@@ -53,16 +54,30 @@ def generation_xvp(sysvar_path: str, selected_variables: Dict[str, List[str]], o
 		output_dir: 输出目录完整路径。
 
 	Returns:
-		生成的 .xvp 文件路径。
+		生成的 .xvp 文件路径列表。每个选中的 message 会生成一个独立文件。
 	"""
 	messages = parse_selected_messages(sysvar_path, selected_variables)
-	panel_tree = build_panel_tree(messages)
-
 	os.makedirs(output_dir, exist_ok=True)
-	output_name = f"{Path(sysvar_path).stem}_panel.xvp"
-	output_path = str(Path(output_dir) / output_name)
-	panel_tree.write(output_path, encoding="utf-8", xml_declaration=True)
-	return output_path
+
+	output_paths: List[str] = []
+	for message in messages:
+		panel_tree = build_panel_tree([message])
+		output_name = panel_file_name(sysvar_path, message)
+		output_path = str(Path(output_dir) / output_name)
+		panel_tree.write(output_path, encoding="utf-8", xml_declaration=True)
+		output_paths.append(output_path)
+
+	return output_paths
+
+
+def panel_file_name(sysvar_path: str, message: MessageInfo) -> str:
+	base_name = Path(sysvar_path).stem
+	return f"{safe_filename(base_name)}_{safe_filename(message.namespace)}_{safe_filename(message.variable_name)}_panel.xvp"
+
+
+def safe_filename(value: str) -> str:
+	name = re.sub(r"[^0-9A-Za-z_]+", "_", value).strip("_")
+	return name or "panel"
 
 
 def parse_selected_messages(sysvar_path: str, selected_variables: Dict[str, List[str]]) -> List[MessageInfo]:
