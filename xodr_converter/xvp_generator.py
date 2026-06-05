@@ -18,6 +18,16 @@ COMBO_BOX_TYPE = "Vector.CANalyzer.Panels.Design.ComboBoxControl, Vector.CANalyz
 RADIO_BUTTON_TYPE = "Vector.CANalyzer.Panels.Design.RadioButtonControl, Vector.CANalyzer.Panels.CommonControls, Version=18.0.150.0, Culture=neutral, PublicKeyToken=null"
 CANVAS_TYPE = "Vector.CANalyzer.Panels.Design.CanvasControl, Vector.CANalyzer.Panels.CommonControls, Version=18.0.150.0, Culture=neutral, PublicKeyToken=null"
 
+GROUP_WIDTH = 1160
+PANEL_WIDTH = 1170
+SIGNAL_RAW_SEPARATOR_X = 211
+RAW_PHYSICAL_SEPARATOR_X = 485
+PHYSICAL_SPECIAL_SEPARATOR_X = 930
+PHYSICAL_VALUE_CONTROL_X = 533
+PHYSICAL_MIN_MAX_X = 787
+SPECIAL_VALUE_X = 945
+INACTIVE_VALUE_X = 1050
+
 
 @dataclass
 class StructMemberInfo:
@@ -175,7 +185,6 @@ def build_panel_tree(messages: Sequence[MessageInfo]) -> ET.ElementTree:
 	)
 
 	y_offset = 19
-	panel_width = 1012
 	for index, message in enumerate(messages, start=1):
 		rows = collect_signal_rows(message)
 		group_height = max(180, 82 + len(rows) * 50)
@@ -183,7 +192,7 @@ def build_panel_tree(messages: Sequence[MessageInfo]) -> ET.ElementTree:
 		y_offset += group_height + 20
 
 	add_property(root_object, "Name", "Panel")
-	add_property(root_object, "Size", f"{panel_width}, {max(725, y_offset)}")
+	add_property(root_object, "Size", f"{PANEL_WIDTH}, {max(725, y_offset)}")
 	add_property(root_object, "Location", "0, 0")
 	add_property(root_object, "BackColor", "255, 255, 255, 255")
 
@@ -237,7 +246,7 @@ def add_message_group(
 		add_horizontal_line(group, y + 35, row_index + 10)
 
 	add_property(group, "Name", group.get("Name", ""))
-	add_property(group, "Size", f"1007, {group_height}")
+	add_property(group, "Size", f"{GROUP_WIDTH}, {group_height}")
 	add_property(group, "Location", f"5, {y_offset}")
 	add_property(group, "BackColor", "WhiteSmoke")
 	add_property(group, "Font", "Microsoft Sans Serif, 12.25pt")
@@ -249,20 +258,20 @@ def add_message_group(
 def add_headers_and_separators(group: ET.Element, group_height: int) -> None:
 	add_static_text(group, "Signal Name", 50, 47, 94, 19, fore_color="255, 225, 128, 48")
 	add_static_text(group, "Raw Value", 304, 47, 81, 19, fore_color="255, 225, 128, 48")
-	add_static_text(group, "Physical Value", 583, 47, 107, 19, fore_color="255, 225, 128, 48")
-	add_static_text(group, "Special Value", 833, 47, 120, 19, fore_color="255, 225, 128, 48")
+	add_static_text(group, "Physical Value", 660, 47, 120, 19, fore_color="255, 225, 128, 48")
+	add_static_text(group, "Special Value", 995, 47, 120, 19, fore_color="255, 225, 128, 48")
 
-	add_vertical_line(group, 211, 47, group_height - 38, 1)
-	add_vertical_line(group, 485, 47, group_height - 38, 2)
-	add_vertical_line(group, 758, 47, group_height - 38, 3)
+	add_vertical_line(group, SIGNAL_RAW_SEPARATOR_X, 47, group_height - 38, 1)
+	add_vertical_line(group, RAW_PHYSICAL_SEPARATOR_X, 47, group_height - 38, 2)
+	add_vertical_line(group, PHYSICAL_SPECIAL_SEPARATOR_X, 47, group_height - 38, 3)
 	add_horizontal_line(group, 79, 4)
 
 
 def add_signal_row(group: ET.Element, message: MessageInfo, row: SignalRow, y: int, row_index: int) -> None:
 	add_static_text(group, row.name, 0, y, 190, 19)
 	add_value_control(group, message, row.raw_member, 256, y - 2, "RawValue", row_index * 10 + 1)
-	add_value_control(group, message, row.physical_member, 533, y - 2, "PhysicalValue", row_index * 10 + 2)
-	add_physical_min_max_text(group, row.physical_member, 533, y + 24)
+	add_value_control(group, message, row.physical_member, PHYSICAL_VALUE_CONTROL_X, y - 2, "PhysicalValue", row_index * 10 + 2)
+	add_physical_min_max_text(group, row.physical_member, PHYSICAL_MIN_MAX_X, y - 4)
 
 	if row.use_special_member is not None:
 		add_radio_button(
@@ -270,7 +279,7 @@ def add_signal_row(group: ET.Element, message: MessageInfo, row: SignalRow, y: i
 			message,
 			row.use_special_member,
 			"special value",
-			772,
+			SPECIAL_VALUE_X,
 			y,
 			row_index * 10 + 3,
 		)
@@ -280,7 +289,7 @@ def add_signal_row(group: ET.Element, message: MessageInfo, row: SignalRow, y: i
 			message,
 			row.use_inactive_member,
 			"inactive value",
-			878,
+			INACTIVE_VALUE_X,
 			y,
 			row_index * 10 + 4,
 		)
@@ -294,13 +303,23 @@ def add_physical_min_max_text(
 ) -> None:
 	add_static_text(
 		parent,
-		f"min: {member.min_value}    max: {member.max_value}",
+		f"min: {member.min_value}",
 		x,
 		y,
-		210,
+		120,
 		16,
 		font="Microsoft Sans Serif, 8.25pt",
-		fore_color="255, 96, 96, 96",
+		fore_color="255, 0, 0, 0",
+	)
+	add_static_text(
+		parent,
+		f"max: {member.max_value}",
+		x,
+		y + 18,
+		150,
+		16,
+		font="Microsoft Sans Serif, 8.25pt",
+		fore_color="255, 0, 0, 0",
 	)
 
 
@@ -424,7 +443,7 @@ def add_vertical_line(parent: ET.Element, x: int, y: int, height: int, tab_index
 
 
 def add_horizontal_line(parent: ET.Element, y: int, tab_index: int) -> None:
-	add_canvas(parent, -5, y, 1007, 3, tab_index)
+	add_canvas(parent, -5, y, GROUP_WIDTH, 3, tab_index)
 
 
 def add_canvas(parent: ET.Element, x: int, y: int, width: int, height: int, tab_index: int) -> None:

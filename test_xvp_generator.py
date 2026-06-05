@@ -67,8 +67,10 @@ class XvpGeneratorTests(unittest.TestCase):
 			]
 			self.assertIn("Message Name: IPB_0x10C", group_texts)
 			self.assertIn("VehicleSpeed", group_texts)
-			self.assertIn("min: 0    max: 102.2", group_texts)
-			self.assertIn("min: ~    max: ~", group_texts)
+			self.assertIn("min: 0", group_texts)
+			self.assertIn("max: 102.2", group_texts)
+			self.assertIn("min: ~", group_texts)
+			self.assertIn("max: ~", group_texts)
 
 			object_types = [obj.get("Type", "") for obj in root.findall(".//Object")]
 			self.assertTrue(any("ComboBoxControl" in obj_type for obj_type in object_types))
