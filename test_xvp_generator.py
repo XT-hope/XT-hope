@@ -71,6 +71,14 @@ class XvpGeneratorTests(unittest.TestCase):
 			self.assertIn("max: 102.2", group_texts)
 			self.assertIn("min: ~", group_texts)
 			self.assertIn("max: ~", group_texts)
+			min_text = next(
+				obj
+				for obj in root.findall(".//Object")
+				if any(prop.get("Name") == "Text" and prop.text == "min: 0" for prop in obj.findall("./Property"))
+			)
+			min_font = min_text.find("./Property[@Name='Font']")
+			self.assertIsNotNone(min_font)
+			self.assertEqual("Microsoft Sans Serif, 7pt", min_font.text)
 
 			object_types = [obj.get("Type", "") for obj in root.findall(".//Object")]
 			self.assertTrue(any("ComboBoxControl" in obj_type for obj_type in object_types))

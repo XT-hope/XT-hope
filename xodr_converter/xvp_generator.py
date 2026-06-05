@@ -27,6 +27,7 @@ PHYSICAL_VALUE_CONTROL_X = 533
 PHYSICAL_MIN_MAX_X = 787
 SPECIAL_VALUE_X = 945
 INACTIVE_VALUE_X = 1050
+MIN_MAX_FONT = "Microsoft Sans Serif, 7pt"
 
 
 @dataclass
@@ -308,7 +309,7 @@ def add_physical_min_max_text(
 		y,
 		120,
 		16,
-		font="Microsoft Sans Serif, 8.25pt",
+		font=MIN_MAX_FONT,
 		fore_color="255, 0, 0, 0",
 	)
 	add_static_text(
@@ -318,7 +319,7 @@ def add_physical_min_max_text(
 		y + 18,
 		150,
 		16,
-		font="Microsoft Sans Serif, 8.25pt",
+		font=MIN_MAX_FONT,
 		fore_color="255, 0, 0, 0",
 	)
 
