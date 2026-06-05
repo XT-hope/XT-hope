@@ -111,6 +111,22 @@ class XvpGeneratorTests(unittest.TestCase):
 			alarm_settings = physical_text_box.find("./Property[@Name='AlarmGeneralSettings']")
 			self.assertIsNotNone(alarm_settings)
 			self.assertEqual("1;102.2;0;3", alarm_settings.text)
+			physical_value_display = physical_text_box.find("./Property[@Name='ValueDisplay']")
+			self.assertIsNotNone(physical_value_display)
+			self.assertEqual("Double", physical_value_display.text)
+
+			int_text_box = next(
+				obj
+				for obj in root.findall(".//Object")
+				if any(
+					prop.get("Name") == "SymbolConfiguration"
+					and prop.text == "8;128;control;;IPB_0x10C;NoRange_Rv;2;;;-1;;;Value;;;0"
+					for prop in obj.findall("./Property")
+				)
+			)
+			int_value_display = int_text_box.find("./Property[@Name='ValueDisplay']")
+			self.assertIsNotNone(int_value_display)
+			self.assertEqual("Decimal", int_value_display.text)
 
 			no_range_text_box = next(
 				obj

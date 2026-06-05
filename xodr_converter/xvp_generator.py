@@ -389,7 +389,7 @@ def add_text_box(
 	add_property(control, "TabIndex", str(tab_index))
 	add_property(control, "DescriptionText", "")
 	add_property(control, "ValueDecimalPlaces", "0" if member.member_type == "int" else "3")
-	add_property(control, "ValueDisplay", "Double")
+	add_property(control, "ValueDisplay", value_display(member))
 	add_property(control, "UsedValueTable", used_value_table)
 	add_property(control, "DescriptionSize", "5, 25")
 	add_property(control, "SymbolConfiguration", symbol_configuration(message, member.name))
@@ -421,6 +421,12 @@ def alarm_general_settings(member: StructMemberInfo) -> str:
 	lower_limit = member.min_value if member.min_value != "~" else DEFAULT_LOWER_LIMIT
 	upper_limit = member.max_value if member.max_value != "~" else DEFAULT_UPPER_LIMIT
 	return f"1;{upper_limit};{lower_limit};3"
+
+
+def value_display(member: StructMemberInfo) -> str:
+	if member.member_type == "int":
+		return "Decimal"
+	return "Double"
 
 
 def add_static_text(
