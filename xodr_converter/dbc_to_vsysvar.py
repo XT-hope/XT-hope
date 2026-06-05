@@ -759,6 +759,7 @@ def struct_member_attrs(
 	max_value: Optional[Decimal],
 	bitcount: int = 64,
 ) -> Dict[str, str]:
+	actual_bitcount = 32 if member_type == "int" else bitcount
 	attrs = {
 		"relativeOffset": "0",
 		"byteOrder": "0",
@@ -766,7 +767,7 @@ def struct_member_attrs(
 		"isHidden": "False",
 		"name": name,
 		"comment": comment,
-		"bitcount": str(bitcount),
+		"bitcount": str(actual_bitcount),
 		"isSigned": "true" if is_signed else "false",
 		"encoding": "65001",
 		"type": member_type,

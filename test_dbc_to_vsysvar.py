@@ -246,6 +246,7 @@ class DbcToVsysvarTests(unittest.TestCase):
 
 		pause_pv = members["PAD_AVPPauseReq_S_Pv"]
 		self.assertEqual("int", pause_pv["type"])
+		self.assertEqual("32", pause_pv["bitcount"])
 		self.assertEqual("false", pause_pv["isSigned"])
 		self.assertEqual("0", pause_pv["startValue"])
 		self.assertEqual("0", pause_pv["minValue"])
@@ -261,6 +262,7 @@ class DbcToVsysvarTests(unittest.TestCase):
 
 		angle_rv = members["EPS_SteerPinionAg_Rv"]
 		self.assertEqual("int", angle_rv["type"])
+		self.assertEqual("32", angle_rv["bitcount"])
 		self.assertEqual("2810", angle_rv["startValue"])
 		self.assertEqual("-7200", angle_rv["minValue"])
 		self.assertEqual("7200", angle_rv["maxValue"])
