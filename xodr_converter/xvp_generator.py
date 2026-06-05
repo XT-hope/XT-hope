@@ -27,7 +27,7 @@ PHYSICAL_VALUE_CONTROL_X = 533
 PHYSICAL_MIN_MAX_X = 787
 SPECIAL_VALUE_X = 945
 INACTIVE_VALUE_X = 1050
-MIN_MAX_FONT = "Microsoft Sans Serif, 7pt"
+MIN_MAX_FONT = "Microsoft Sans Serif, 9.25pt"
 
 
 @dataclass
