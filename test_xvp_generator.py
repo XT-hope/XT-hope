@@ -22,6 +22,8 @@ SYSVAR_XML = """<?xml version="1.0" encoding="utf-8"?>
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="VehicleSpeed_Pv" comment="" bitcount="64" isSigned="false" encoding="65001" type="double" startValue="0" minValue="0" maxValue="102.2" />
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="VehicleSpeed_use_special_value" comment="" bitcount="64" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="VehicleSpeed_use_inactive_value" comment="" bitcount="64" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="NoRange_Rv" comment="" bitcount="64" isSigned="false" encoding="65001" type="int" startValue="0" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="NoRange_Pv" comment="" bitcount="64" isSigned="false" encoding="65001" type="double" startValue="0" />
       </struct>
       <struct name="eps_0x06d" isUnion="False" definedBinaryLayout="False" comment="">
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="SteerAngle_Rv" comment="" bitcount="64" isSigned="true" encoding="65001" type="int" startValue="0" minValue="-7200" maxValue="7200" />
@@ -65,6 +67,8 @@ class XvpGeneratorTests(unittest.TestCase):
 			]
 			self.assertIn("Message Name: IPB_0x10C", group_texts)
 			self.assertIn("VehicleSpeed", group_texts)
+			self.assertIn("min: 0    max: 102.2", group_texts)
+			self.assertIn("min: ~    max: ~", group_texts)
 
 			object_types = [obj.get("Type", "") for obj in root.findall(".//Object")]
 			self.assertTrue(any("ComboBoxControl" in obj_type for obj_type in object_types))

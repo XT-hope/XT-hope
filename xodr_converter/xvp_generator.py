@@ -24,6 +24,8 @@ class StructMemberInfo:
 	name: str
 	member_type: str
 	comment: str = ""
+	min_value: str = "~"
+	max_value: str = "~"
 	valuetable: Dict[str, str] = field(default_factory=dict)
 
 
@@ -143,6 +145,8 @@ def parse_struct_members(struct: ET.Element) -> Dict[str, StructMemberInfo]:
 			name=member_name,
 			member_type=member.get("type", ""),
 			comment=member.get("comment", ""),
+			min_value=member.get("minValue", "~"),
+			max_value=member.get("maxValue", "~"),
 			valuetable=parse_value_table(member),
 		)
 	return members
@@ -258,6 +262,7 @@ def add_signal_row(group: ET.Element, message: MessageInfo, row: SignalRow, y: i
 	add_static_text(group, row.name, 0, y, 190, 19)
 	add_value_control(group, message, row.raw_member, 256, y - 2, "RawValue", row_index * 10 + 1)
 	add_value_control(group, message, row.physical_member, 533, y - 2, "PhysicalValue", row_index * 10 + 2)
+	add_physical_min_max_text(group, row.physical_member, 533, y + 24)
 
 	if row.use_special_member is not None:
 		add_radio_button(
@@ -279,6 +284,24 @@ def add_signal_row(group: ET.Element, message: MessageInfo, row: SignalRow, y: i
 			y,
 			row_index * 10 + 4,
 		)
+
+
+def add_physical_min_max_text(
+	parent: ET.Element,
+	member: StructMemberInfo,
+	x: int,
+	y: int,
+) -> None:
+	add_static_text(
+		parent,
+		f"min: {member.min_value}    max: {member.max_value}",
+		x,
+		y,
+		210,
+		16,
+		font="Microsoft Sans Serif, 8.25pt",
+		fore_color="255, 96, 96, 96",
+	)
 
 
 def add_value_control(
@@ -380,6 +403,7 @@ def add_static_text(
 	width: int,
 	height: int,
 	fore_color: Optional[str] = None,
+	font: str = "Microsoft Sans Serif, 11.25pt",
 ) -> None:
 	control = ET.SubElement(
 		parent,
@@ -391,7 +415,7 @@ def add_static_text(
 	add_property(control, "Location", f"{x}, {y}")
 	if fore_color:
 		add_property(control, "ForeColor", fore_color)
-	add_property(control, "Font", "Microsoft Sans Serif, 11.25pt")
+	add_property(control, "Font", font)
 	add_property(control, "Text", text)
 
 
