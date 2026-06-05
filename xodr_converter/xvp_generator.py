@@ -28,6 +28,8 @@ PHYSICAL_MIN_MAX_X = 787
 SPECIAL_VALUE_X = 945
 INACTIVE_VALUE_X = 1050
 MIN_MAX_FONT = "Microsoft Sans Serif, 9.25pt"
+DEFAULT_LOWER_LIMIT = "-2147483648"
+DEFAULT_UPPER_LIMIT = "2147483647"
 
 
 @dataclass
@@ -416,8 +418,8 @@ def add_radio_button(
 
 
 def alarm_general_settings(member: StructMemberInfo) -> str:
-	lower_limit = member.min_value if member.min_value != "~" else "0"
-	upper_limit = member.max_value if member.max_value != "~" else "0"
+	lower_limit = member.min_value if member.min_value != "~" else DEFAULT_LOWER_LIMIT
+	upper_limit = member.max_value if member.max_value != "~" else DEFAULT_UPPER_LIMIT
 	return f"1;{upper_limit};{lower_limit};3"
 
 
