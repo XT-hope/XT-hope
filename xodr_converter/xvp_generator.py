@@ -442,7 +442,7 @@ def add_static_text(
 	control = ET.SubElement(
 		parent,
 		"Object",
-		{"Type": STATIC_TEXT_TYPE, "Name": object_name(), "ControlName": "Static Text"},
+		{"Type": STATIC_TEXT_TYPE, "Name": object_name(), "ControlName": f"Static Text {short_id()}"},
 	)
 	add_property(control, "Name", control.get("Name", ""))
 	add_property(control, "Size", f"{width}, {height}")
@@ -485,3 +485,7 @@ def add_property(parent: ET.Element, name: str, value: str) -> None:
 
 def object_name() -> str:
 	return f"X{uuid.uuid4().hex}"
+
+
+def short_id() -> str:
+	return uuid.uuid4().hex[:8]
