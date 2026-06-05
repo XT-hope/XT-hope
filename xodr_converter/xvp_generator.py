@@ -185,7 +185,7 @@ def build_panel_tree(messages: Sequence[MessageInfo]) -> ET.ElementTree:
 		{"Type": RUNTIME_PANEL_TYPE, "Name": "Panel", "ControlName": "xt"},
 	)
 
-	y_offset = 19
+	y_offset = 0
 	for index, message in enumerate(messages, start=1):
 		rows = collect_signal_rows(message)
 		group_height = max(180, 82 + len(rows) * 50)
