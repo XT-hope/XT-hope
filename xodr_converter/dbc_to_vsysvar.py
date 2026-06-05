@@ -499,21 +499,21 @@ def add_message_struct_and_variable(
 			value_table_entries = member_value_table_entries(signal, suffix, member_type, normal_choices)
 			if include_value_table and value_table_entries:
 				add_value_table(member_element, f"{signal.name}Vt", value_table_entries)
-			bitcount += 64
+			bitcount += member_bitcount(member_type)
 		add_has_special_value_member(struct_element, signal, has_special_value=bool(special_choices))
-		bitcount += 64
+		bitcount += member_bitcount("int")
 		add_use_special_value_member(struct_element, signal)
-		bitcount += 64
+		bitcount += member_bitcount("int")
 		if special_choices:
 			add_special_value_member(struct_element, signal, special_choices)
-			bitcount += 64
+			bitcount += member_bitcount("int")
 		add_has_inactive_value_member(struct_element, signal)
-		bitcount += 64
+		bitcount += member_bitcount("int")
 		add_use_inactive_value_member(struct_element, signal)
-		bitcount += 64
+		bitcount += member_bitcount("int")
 		if signal.inactive_raw is not None:
 			add_inactive_value_member(struct_element, signal)
-			bitcount += 64
+			bitcount += member_bitcount("int")
 
 	ET.SubElement(
 		namespace_element,
@@ -759,7 +759,7 @@ def struct_member_attrs(
 	max_value: Optional[Decimal],
 	bitcount: int = 64,
 ) -> Dict[str, str]:
-	actual_bitcount = 32 if member_type == "int" else bitcount
+	actual_bitcount = member_bitcount(member_type, bitcount)
 	attrs = {
 		"relativeOffset": "0",
 		"byteOrder": "0",
@@ -778,6 +778,12 @@ def struct_member_attrs(
 	if max_value is not None and should_write_bound(member_type, max_value):
 		attrs["maxValue"] = decimal_to_text(max_value)
 	return attrs
+
+
+def member_bitcount(member_type: str, bitcount: int = 64) -> int:
+	if member_type == "int":
+		return 32
+	return bitcount
 
 
 def value_to_text(value: Union[Decimal, str]) -> str:

@@ -292,7 +292,7 @@ class DbcToVsysvarTests(unittest.TestCase):
 		self.assertIsNotNone(variable)
 		self.assertEqual("struct", variable.attrib["type"])
 		self.assertEqual("ControlCAN::media_0x23d", variable.attrib["structDefinition"])
-		self.assertEqual("1024", variable.attrib["bitcount"])
+		self.assertEqual("672", variable.attrib["bitcount"])
 
 	def test_writes_node_info_struct_from_bu_nodes(self) -> None:
 		database = parse_dbc_text(CONTROL_DBC)
