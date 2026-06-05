@@ -248,7 +248,7 @@ def add_message_group(
 
 	add_property(group, "Name", group.get("Name", ""))
 	add_property(group, "Size", f"{GROUP_WIDTH}, {group_height}")
-	add_property(group, "Location", f"5, {y_offset}")
+	add_property(group, "Location", f"0, {y_offset}")
 	add_property(group, "BackColor", "WhiteSmoke")
 	add_property(group, "Font", "Microsoft Sans Serif, 12.25pt")
 	add_property(group, "Text", f"Message Name: {message.variable_name}")
