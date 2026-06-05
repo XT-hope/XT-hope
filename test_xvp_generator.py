@@ -99,6 +99,19 @@ class XvpGeneratorTests(unittest.TestCase):
 				symbol_configurations,
 			)
 
+			physical_text_box = next(
+				obj
+				for obj in root.findall(".//Object")
+				if any(
+					prop.get("Name") == "SymbolConfiguration"
+					and prop.text == "8;128;control;;IPB_0x10C;VehicleSpeed_Pv;2;;;-1;;;Value;;;0"
+					for prop in obj.findall("./Property")
+				)
+			)
+			alarm_settings = physical_text_box.find("./Property[@Name='AlarmGeneralSettings']")
+			self.assertIsNotNone(alarm_settings)
+			self.assertEqual("1;102.2;0;3", alarm_settings.text)
+
 
 if __name__ == "__main__":
 	unittest.main()

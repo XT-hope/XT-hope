@@ -373,7 +373,7 @@ def add_text_box(
 	add_property(control, "Name", control.get("Name", ""))
 	add_property(control, "Size", "187, 25")
 	add_property(control, "Location", f"{x}, {y}")
-	add_property(control, "AlarmGeneralSettings", "1;3;0;3")
+	add_property(control, "AlarmGeneralSettings", alarm_general_settings(member))
 	add_property(control, "AlarmLowerBkgColor", "Salmon")
 	add_property(control, "AlarmLowerTextColor", "ControlText")
 	add_property(control, "AlarmUpperBkgColor", "IndianRed")
@@ -413,6 +413,12 @@ def add_radio_button(
 	add_property(control, "Text", text)
 	add_property(control, "TabIndex", str(tab_index))
 	add_property(control, "SymbolConfiguration", symbol_configuration(message, member.name))
+
+
+def alarm_general_settings(member: StructMemberInfo) -> str:
+	lower_limit = member.min_value if member.min_value != "~" else "0"
+	upper_limit = member.max_value if member.max_value != "~" else "0"
+	return f"1;{upper_limit};{lower_limit};3"
 
 
 def add_static_text(
