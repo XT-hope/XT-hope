@@ -110,7 +110,7 @@ class XvpGeneratorTests(unittest.TestCase):
 			)
 			alarm_settings = physical_text_box.find("./Property[@Name='AlarmGeneralSettings']")
 			self.assertIsNotNone(alarm_settings)
-			self.assertEqual("1;102.2;0;3", alarm_settings.text)
+			self.assertEqual("1;3;0;102.2", alarm_settings.text)
 			physical_value_display = physical_text_box.find("./Property[@Name='ValueDisplay']")
 			self.assertIsNotNone(physical_value_display)
 			self.assertEqual("Double", physical_value_display.text)
@@ -139,7 +139,7 @@ class XvpGeneratorTests(unittest.TestCase):
 			)
 			no_range_alarm_settings = no_range_text_box.find("./Property[@Name='AlarmGeneralSettings']")
 			self.assertIsNotNone(no_range_alarm_settings)
-			self.assertEqual("1;2147483647;-2147483648;3", no_range_alarm_settings.text)
+			self.assertEqual("1;3;-2147483648;2147483647", no_range_alarm_settings.text)
 
 
 if __name__ == "__main__":

@@ -420,7 +420,7 @@ def add_radio_button(
 def alarm_general_settings(member: StructMemberInfo) -> str:
 	lower_limit = member.min_value if member.min_value != "~" else DEFAULT_LOWER_LIMIT
 	upper_limit = member.max_value if member.max_value != "~" else DEFAULT_UPPER_LIMIT
-	return f"1;{upper_limit};{lower_limit};3"
+	return f"1;3;{lower_limit};{upper_limit}"
 
 
 def value_display(member: StructMemberInfo) -> str:
