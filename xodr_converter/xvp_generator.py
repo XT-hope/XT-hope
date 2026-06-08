@@ -23,6 +23,10 @@ PANEL_WIDTH = 1170
 SIGNAL_RAW_SEPARATOR_X = 211
 RAW_PHYSICAL_SEPARATOR_X = 485
 PHYSICAL_SPECIAL_SEPARATOR_X = 930
+RAW_VALUE_CONTROL_X = 256
+RAW_MIN_MAX_X = 385
+RAW_TEXT_BOX_WIDTH = 120
+DEFAULT_VALUE_CONTROL_WIDTH = 187
 PHYSICAL_VALUE_CONTROL_X = 533
 PHYSICAL_MIN_MAX_X = 787
 SPECIAL_VALUE_X = 945
@@ -272,9 +276,22 @@ def add_headers_and_separators(group: ET.Element, group_height: int) -> None:
 
 def add_signal_row(group: ET.Element, message: MessageInfo, row: SignalRow, y: int, row_index: int) -> None:
 	add_static_text(group, row.name, 0, y, 190, 19)
-	add_value_control(group, message, row.raw_member, 256, y - 2, "RawValue", row_index * 10 + 1)
+	if row.raw_member.valuetable:
+		add_value_control(group, message, row.raw_member, RAW_VALUE_CONTROL_X, y - 2, "RawValue", row_index * 10 + 1)
+	else:
+		add_value_control(
+			group,
+			message,
+			row.raw_member,
+			RAW_VALUE_CONTROL_X,
+			y - 2,
+			"RawValue",
+			row_index * 10 + 1,
+			width=RAW_TEXT_BOX_WIDTH,
+		)
+		add_min_max_text(group, row.raw_member, RAW_MIN_MAX_X, y - 4)
 	add_value_control(group, message, row.physical_member, PHYSICAL_VALUE_CONTROL_X, y - 2, "PhysicalValue", row_index * 10 + 2)
-	add_physical_min_max_text(group, row.physical_member, PHYSICAL_MIN_MAX_X, y - 4)
+	add_min_max_text(group, row.physical_member, PHYSICAL_MIN_MAX_X, y - 4)
 
 	if row.use_special_member is not None:
 		add_radio_button(
@@ -298,7 +315,7 @@ def add_signal_row(group: ET.Element, message: MessageInfo, row: SignalRow, y: i
 		)
 
 
-def add_physical_min_max_text(
+def add_min_max_text(
 	parent: ET.Element,
 	member: StructMemberInfo,
 	x: int,
@@ -334,21 +351,30 @@ def add_value_control(
 	y: int,
 	used_value_table: str,
 	tab_index: int,
+	width: int = DEFAULT_VALUE_CONTROL_WIDTH,
 ) -> None:
 	if member.valuetable:
-		add_combo_box(parent, message, member, x, y, tab_index)
+		add_combo_box(parent, message, member, x, y, tab_index, width=width)
 	else:
-		add_text_box(parent, message, member, x, y, used_value_table, tab_index)
+		add_text_box(parent, message, member, x, y, used_value_table, tab_index, width=width)
 
 
-def add_combo_box(parent: ET.Element, message: MessageInfo, member: StructMemberInfo, x: int, y: int, tab_index: int) -> None:
+def add_combo_box(
+	parent: ET.Element,
+	message: MessageInfo,
+	member: StructMemberInfo,
+	x: int,
+	y: int,
+	tab_index: int,
+	width: int = DEFAULT_VALUE_CONTROL_WIDTH,
+) -> None:
 	control = ET.SubElement(
 		parent,
 		"Object",
 		{"Type": COMBO_BOX_TYPE, "Name": object_name(), "ControlName": f"Combo Box {tab_index}"},
 	)
 	add_property(control, "Name", control.get("Name", ""))
-	add_property(control, "Size", "187, 23")
+	add_property(control, "Size", f"{width}, 23")
 	add_property(control, "Location", f"{x}, {y}")
 	add_property(control, "DisplayLabel", "Left")
 	add_property(control, "DescriptionSize", "5, 23")
@@ -366,6 +392,7 @@ def add_text_box(
 	y: int,
 	used_value_table: str,
 	tab_index: int,
+	width: int = DEFAULT_VALUE_CONTROL_WIDTH,
 ) -> None:
 	control = ET.SubElement(
 		parent,
@@ -373,7 +400,7 @@ def add_text_box(
 		{"Type": TEXT_BOX_TYPE, "Name": object_name(), "ControlName": f"Input/Output Box {tab_index}"},
 	)
 	add_property(control, "Name", control.get("Name", ""))
-	add_property(control, "Size", "187, 25")
+	add_property(control, "Size", f"{width}, 25")
 	add_property(control, "Location", f"{x}, {y}")
 	add_property(control, "AlarmGeneralSettings", alarm_general_settings(member))
 	add_property(control, "AlarmLowerBkgColor", "Salmon")

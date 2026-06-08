@@ -24,6 +24,8 @@ SYSVAR_XML = """<?xml version="1.0" encoding="utf-8"?>
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="VehicleSpeed_use_inactive_value" comment="" bitcount="64" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="NoRange_Rv" comment="" bitcount="64" isSigned="false" encoding="65001" type="int" startValue="0" />
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="NoRange_Pv" comment="" bitcount="64" isSigned="false" encoding="65001" type="double" startValue="0" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="NumericRaw_Rv" comment="" bitcount="64" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="4095" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="NumericRaw_Pv" comment="" bitcount="64" isSigned="false" encoding="65001" type="double" startValue="0" minValue="0" maxValue="409.5" />
       </struct>
       <struct name="eps_0x06d" isUnion="False" definedBinaryLayout="False" comment="">
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="SteerAngle_Rv" comment="" bitcount="64" isSigned="true" encoding="65001" type="int" startValue="0" minValue="-7200" maxValue="7200" />
@@ -69,6 +71,7 @@ class XvpGeneratorTests(unittest.TestCase):
 			self.assertIn("VehicleSpeed", group_texts)
 			self.assertIn("min: 0", group_texts)
 			self.assertIn("max: 102.2", group_texts)
+			self.assertIn("max: 4095", group_texts)
 			self.assertIn("min: ~", group_texts)
 			self.assertIn("max: ~", group_texts)
 			min_text = next(
@@ -140,6 +143,19 @@ class XvpGeneratorTests(unittest.TestCase):
 			no_range_alarm_settings = no_range_text_box.find("./Property[@Name='AlarmGeneralSettings']")
 			self.assertIsNotNone(no_range_alarm_settings)
 			self.assertEqual("1;3;-2147483648;2147483647", no_range_alarm_settings.text)
+
+			numeric_raw_text_box = next(
+				obj
+				for obj in root.findall(".//Object")
+				if any(
+					prop.get("Name") == "SymbolConfiguration"
+					and prop.text == "8;128;control;;IPB_0x10C;NumericRaw_Rv;2;;;-1;;;Value;;;0"
+					for prop in obj.findall("./Property")
+				)
+			)
+			numeric_raw_size = numeric_raw_text_box.find("./Property[@Name='Size']")
+			self.assertIsNotNone(numeric_raw_size)
+			self.assertEqual("120, 25", numeric_raw_size.text)
 
 
 if __name__ == "__main__":
