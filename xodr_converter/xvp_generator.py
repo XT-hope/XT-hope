@@ -18,19 +18,19 @@ COMBO_BOX_TYPE = "Vector.CANalyzer.Panels.Design.ComboBoxControl, Vector.CANalyz
 RADIO_BUTTON_TYPE = "Vector.CANalyzer.Panels.Design.RadioButtonControl, Vector.CANalyzer.Panels.CommonControls, Version=18.0.150.0, Culture=neutral, PublicKeyToken=null"
 CANVAS_TYPE = "Vector.CANalyzer.Panels.Design.CanvasControl, Vector.CANalyzer.Panels.CommonControls, Version=18.0.150.0, Culture=neutral, PublicKeyToken=null"
 
-GROUP_WIDTH = 1160
-PANEL_WIDTH = 1170
+GROUP_WIDTH = 1070
+PANEL_WIDTH = 1080
 SIGNAL_RAW_SEPARATOR_X = 211
-RAW_PHYSICAL_SEPARATOR_X = 485
-PHYSICAL_SPECIAL_SEPARATOR_X = 930
+RAW_PHYSICAL_SEPARATOR_X = 531
+PHYSICAL_SPECIAL_SEPARATOR_X = 851
 RAW_VALUE_CONTROL_X = 256
-RAW_MIN_MAX_X = 385
-RAW_TEXT_BOX_WIDTH = 120
-DEFAULT_VALUE_CONTROL_WIDTH = 187
-PHYSICAL_VALUE_CONTROL_X = 533
-PHYSICAL_MIN_MAX_X = 787
-SPECIAL_VALUE_X = 945
-INACTIVE_VALUE_X = 1050
+RAW_MIN_MAX_X = 410
+RAW_TEXT_BOX_WIDTH = 140
+DEFAULT_VALUE_CONTROL_WIDTH = 140
+PHYSICAL_VALUE_CONTROL_X = 556
+PHYSICAL_MIN_MAX_X = 710
+SPECIAL_VALUE_X = 870
+INACTIVE_VALUE_X = 970
 MIN_MAX_FONT = "Microsoft Sans Serif, 9.25pt"
 DEFAULT_LOWER_LIMIT = "-2147483648"
 DEFAULT_UPPER_LIMIT = "2147483647"
@@ -264,9 +264,9 @@ def add_message_group(
 
 def add_headers_and_separators(group: ET.Element, group_height: int) -> None:
 	add_static_text(group, "Signal Name", 50, 47, 94, 19, fore_color="255, 225, 128, 48")
-	add_static_text(group, "Raw Value", 304, 47, 81, 19, fore_color="255, 225, 128, 48")
-	add_static_text(group, "Physical Value", 660, 47, 120, 19, fore_color="255, 225, 128, 48")
-	add_static_text(group, "Special Value", 995, 47, 120, 19, fore_color="255, 225, 128, 48")
+	add_static_text(group, "Raw Value", 328, 47, 81, 19, fore_color="255, 225, 128, 48")
+	add_static_text(group, "Physical Value", 635, 47, 120, 19, fore_color="255, 225, 128, 48")
+	add_static_text(group, "Special Value", 925, 47, 120, 19, fore_color="255, 225, 128, 48")
 
 	add_vertical_line(group, SIGNAL_RAW_SEPARATOR_X, 47, group_height - 38, 1)
 	add_vertical_line(group, RAW_PHYSICAL_SEPARATOR_X, 47, group_height - 38, 2)

@@ -113,7 +113,7 @@ class XvpGeneratorTests(unittest.TestCase):
 			)
 			raw_combo_size = raw_combo_box.find("./Property[@Name='Size']")
 			self.assertIsNotNone(raw_combo_size)
-			self.assertEqual("120, 23", raw_combo_size.text)
+			self.assertEqual("140, 23", raw_combo_size.text)
 
 			physical_text_box = next(
 				obj
@@ -168,7 +168,7 @@ class XvpGeneratorTests(unittest.TestCase):
 			)
 			numeric_raw_size = numeric_raw_text_box.find("./Property[@Name='Size']")
 			self.assertIsNotNone(numeric_raw_size)
-			self.assertEqual("120, 25", numeric_raw_size.text)
+			self.assertEqual("140, 25", numeric_raw_size.text)
 
 
 if __name__ == "__main__":
