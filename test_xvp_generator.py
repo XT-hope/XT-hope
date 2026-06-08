@@ -13,6 +13,7 @@ SYSVAR_XML = """<?xml version="1.0" encoding="utf-8"?>
   <namespace name="" comment="" interface="">
     <namespace name="control" comment="" interface="">
       <struct name="ipb_0x10c" isUnion="False" definedBinaryLayout="False" comment="">
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_0x10C_node" comment="" bitcount="0" isSigned="false" encoding="65001" type="string" startValue="IPB" />
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="VehicleSpeed_Rv" comment="" bitcount="64" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="3">
           <valuetable name="VehicleSpeedVt" definesMinMax="false">
             <valuetableentry value="0" lowerBound="0" upperBound="0" description="Invalid" displayString="Invalid" />
@@ -28,6 +29,7 @@ SYSVAR_XML = """<?xml version="1.0" encoding="utf-8"?>
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="NumericRaw_Pv" comment="" bitcount="64" isSigned="false" encoding="65001" type="double" startValue="0" minValue="0" maxValue="409.5" />
       </struct>
       <struct name="eps_0x06d" isUnion="False" definedBinaryLayout="False" comment="">
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="EPS_0x06D_node" comment="" bitcount="0" isSigned="false" encoding="65001" type="string" startValue="EPS" />
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="SteerAngle_Rv" comment="" bitcount="64" isSigned="true" encoding="65001" type="int" startValue="0" minValue="-7200" maxValue="7200" />
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="SteerAngle_Pv" comment="" bitcount="64" isSigned="true" encoding="65001" type="double" startValue="0" minValue="-720" maxValue="720" />
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="SteerAngle_use_special_value" comment="" bitcount="64" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
@@ -55,9 +57,9 @@ class XvpGeneratorTests(unittest.TestCase):
 			)
 
 			self.assertEqual(2, len(output_paths))
-			self.assertTrue(any(path.endswith("demo_control_IPB_0x10C_panel.xvp") for path in output_paths))
-			self.assertTrue(any(path.endswith("demo_control_EPS_0x06D_panel.xvp") for path in output_paths))
-			output_path = next(path for path in output_paths if path.endswith("demo_control_IPB_0x10C_panel.xvp"))
+			self.assertTrue(any(path.endswith("control_IPB_IPB_0x10C_panel.xvp") for path in output_paths))
+			self.assertTrue(any(path.endswith("control_EPS_EPS_0x06D_panel.xvp") for path in output_paths))
+			output_path = next(path for path in output_paths if path.endswith("control_IPB_IPB_0x10C_panel.xvp"))
 			self.assertTrue(Path(output_path).exists())
 			root = ET.parse(output_path).getroot()
 			self.assertEqual("Panel", root.tag)

@@ -41,6 +41,7 @@ class StructMemberInfo:
 	name: str
 	member_type: str
 	comment: str = ""
+	start_value: str = ""
 	min_value: str = "~"
 	max_value: str = "~"
 	valuetable: Dict[str, str] = field(default_factory=dict)
@@ -52,6 +53,7 @@ class MessageInfo:
 	variable_name: str
 	struct_name: str
 	members: Dict[str, StructMemberInfo]
+	node_name: str = ""
 
 
 @dataclass
@@ -90,8 +92,8 @@ def generation_xvp(sysvar_path: str, selected_variables: Dict[str, List[str]], o
 
 
 def panel_file_name(sysvar_path: str, message: MessageInfo) -> str:
-	base_name = Path(sysvar_path).stem
-	return f"{safe_filename(base_name)}_{safe_filename(message.namespace)}_{safe_filename(message.variable_name)}_panel.xvp"
+	node_name = message.node_name or "node"
+	return f"{safe_filename(message.namespace)}_{safe_filename(node_name)}_{safe_filename(message.variable_name)}_panel.xvp"
 
 
 def safe_filename(value: str) -> str:
@@ -132,6 +134,7 @@ def parse_selected_messages(sysvar_path: str, selected_variables: Dict[str, List
 					variable_name=variable_name,
 					struct_name=struct_name,
 					members=parse_struct_members(struct),
+					node_name=message_node_name(variable_name, struct),
 				)
 			)
 
@@ -162,11 +165,20 @@ def parse_struct_members(struct: ET.Element) -> Dict[str, StructMemberInfo]:
 			name=member_name,
 			member_type=member.get("type", ""),
 			comment=member.get("comment", ""),
+			start_value=member.get("startValue", ""),
 			min_value=member.get("minValue", "~"),
 			max_value=member.get("maxValue", "~"),
 			valuetable=parse_value_table(member),
 		)
 	return members
+
+
+def message_node_name(variable_name: str, struct: ET.Element) -> str:
+	node_member_name = f"{variable_name}_node"
+	for member in struct.findall("./structMember"):
+		if member.get("name", "") == node_member_name:
+			return member.get("startValue", "")
+	return ""
 
 
 def parse_value_table(member: ET.Element) -> Dict[str, str]:
