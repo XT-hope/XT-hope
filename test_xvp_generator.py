@@ -102,6 +102,19 @@ class XvpGeneratorTests(unittest.TestCase):
 				symbol_configurations,
 			)
 
+			raw_combo_box = next(
+				obj
+				for obj in root.findall(".//Object")
+				if any(
+					prop.get("Name") == "SymbolConfiguration"
+					and prop.text == "8;128;control;;IPB_0x10C;VehicleSpeed_Rv;2;;;-1;;;Value;;;0"
+					for prop in obj.findall("./Property")
+				)
+			)
+			raw_combo_size = raw_combo_box.find("./Property[@Name='Size']")
+			self.assertIsNotNone(raw_combo_size)
+			self.assertEqual("120, 23", raw_combo_size.text)
+
 			physical_text_box = next(
 				obj
 				for obj in root.findall(".//Object")

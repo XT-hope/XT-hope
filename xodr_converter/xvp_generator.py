@@ -276,20 +276,17 @@ def add_headers_and_separators(group: ET.Element, group_height: int) -> None:
 
 def add_signal_row(group: ET.Element, message: MessageInfo, row: SignalRow, y: int, row_index: int) -> None:
 	add_static_text(group, row.name, 0, y, 190, 19)
-	if row.raw_member.valuetable:
-		add_value_control(group, message, row.raw_member, RAW_VALUE_CONTROL_X, y - 2, "RawValue", row_index * 10 + 1)
-	else:
-		add_value_control(
-			group,
-			message,
-			row.raw_member,
-			RAW_VALUE_CONTROL_X,
-			y - 2,
-			"RawValue",
-			row_index * 10 + 1,
-			width=RAW_TEXT_BOX_WIDTH,
-		)
-		add_min_max_text(group, row.raw_member, RAW_MIN_MAX_X, y - 4)
+	add_value_control(
+		group,
+		message,
+		row.raw_member,
+		RAW_VALUE_CONTROL_X,
+		y - 2,
+		"RawValue",
+		row_index * 10 + 1,
+		width=RAW_TEXT_BOX_WIDTH,
+	)
+	add_min_max_text(group, row.raw_member, RAW_MIN_MAX_X, y - 4)
 	add_value_control(group, message, row.physical_member, PHYSICAL_VALUE_CONTROL_X, y - 2, "PhysicalValue", row_index * 10 + 2)
 	add_min_max_text(group, row.physical_member, PHYSICAL_MIN_MAX_X, y - 4)
 
