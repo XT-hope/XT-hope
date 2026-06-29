@@ -258,6 +258,17 @@ def _to_capl_number(text: Optional[str], default: str) -> str:
     return text
 
 
+def _format_float(text: Optional[str], default: str) -> str:
+    """把 Factor/Offset 文本规范化为 CAPL 浮点字面量。"""
+    if text is None or text == "":
+        return default
+    try:
+        float(text)
+        return text.strip()
+    except ValueError:
+        return default
+
+
 def _to_capl_int_literal(value: str) -> str:
     """把 0x..., 'true'/'false', 十进制等规范化为 CAPL 整型字面量。"""
     v = value.strip().lower()
@@ -273,64 +284,74 @@ def _to_capl_int_literal(value: str) -> str:
         return "0"
 
 
-# CRC 通用库（参数化 CRC16）。生成一次，被各 .can 文件 include。
+# 校验库（自动生成，被各 .can 文件 include）。
+# - 查表版 CRC16-CCITT：poly 0x1021 / init 0xFFFF / xorOut 0x0000，可由参数变更。
+# - sum 校验：逐字节求和后取反（^0xFF）。
 CHECKSUM_LIB = """/*@!Encoding:65001*/
 /*
- * 通用参数化 CRC16 计算库（自动生成，请勿手改）。
- * 通过 poly / init / refIn / refOut / xorOut 支持常见 CRC16 变体。
+ * 报文校验库（自动生成，请勿手改）。
+ * 1) PROJ_CRC16_CCITT：查表法 CRC16-CCITT，poly/init/xorOut 可由调用参数控制。
+ * 2) PROJ_Checksum    ：逐字节求和后取反（sum ^ 0xFF）。
  */
 
-byte ReflectByte(byte value)
+variables
 {
-  byte result;
-  long i;
-  result = 0;
-  for (i = 0; i < 8; i++)
-  {
-    if (value & (1 << i))
-      result |= (byte)(1 << (7 - i));
-  }
-  return result;
+  word gCrc1021Table[256];
+  byte gCrcTableReady = 0;
+  dword gCrcTablePoly = 0;
 }
 
-dword Reflect16(dword value)
+void BuildCrc16Table(dword poly)
 {
-  dword result;
-  long i;
-  result = 0;
-  for (i = 0; i < 16; i++)
-  {
-    if (value & ((dword)1 << i))
-      result |= ((dword)1 << (15 - i));
-  }
-  return result & 0xFFFF;
-}
-
-dword ComputeCrc16(byte data[], long len, dword poly, dword init, long refIn, long refOut, dword xorOut)
-{
-  dword crc;
   long i, b;
-  byte cur;
+  word crc;
 
-  crc = init & 0xFFFF;
-  for (i = 0; i < len; i++)
+  for (i = 0; i < 256; i++)
   {
-    cur = data[i];
-    if (refIn)
-      cur = ReflectByte(cur);
-    crc = crc ^ ((dword)cur << 8);
+    crc = (word)((i << 8) & 0xFFFF);
     for (b = 0; b < 8; b++)
     {
       if (crc & 0x8000)
-        crc = ((crc << 1) ^ poly) & 0xFFFF;
+        crc = (word)(((crc << 1) ^ poly) & 0xFFFF);
       else
-        crc = (crc << 1) & 0xFFFF;
+        crc = (word)((crc << 1) & 0xFFFF);
     }
+    gCrc1021Table[i] = crc;
   }
-  if (refOut)
-    crc = Reflect16(crc);
-  crc = (crc ^ xorOut) & 0xFFFF;
-  return crc & 0xFFFF;
+  gCrcTablePoly = poly;
+  gCrcTableReady = 1;
+}
+
+// 查表法 CRC16-CCITT（非反射）。init/poly/xorOut 由调用方传入，便于按报文配置变更。
+word PROJ_CRC16_CCITT(byte data[], long len, dword init, dword poly, dword xorOut)
+{
+  word crc;
+  long i;
+  byte idx;
+
+  // 多项式变化时（或首次调用）重建查找表。
+  if (!gCrcTableReady || gCrcTablePoly != poly)
+    BuildCrc16Table(poly);
+
+  crc = (word)(init & 0xFFFF);
+  for (i = 0; i < len; i++)
+  {
+    idx = (byte)(((crc >> 8) ^ data[i]) & 0xFF);
+    crc = (word)(((crc << 8) ^ gCrc1021Table[idx]) & 0xFFFF);
+  }
+  return (word)((crc ^ xorOut) & 0xFFFF);
+}
+
+// sum 校验：逐字节求和后取反。
+byte PROJ_Checksum(byte data[], long len)
+{
+  byte sum;
+  long i;
+
+  sum = 0;
+  for (i = 0; i < len; i++)
+    sum = (byte)((sum + data[i]) & 0xFF);
+  return (byte)(sum ^ 0xFF);
 }
 """
 
@@ -378,22 +399,26 @@ def _build_fill_function(
         lines.append("  else")
         lines.append(f"    {cnt_var} = {cnt_var} + 1;")
 
-    # 3) checksum：先清零再对整条报文数据计算 CRC
+    # 3) checksum：先清零，再对整条报文数据计算校验值。
+    #    覆盖范围当前为“整条报文数据字节（校验字段已清零）”。如需排除 counter / 含 DataID，
+    #    仅需调整下面读取 _data 的范围与 _n。
     if has_checksum:
+        method = (check_method or "crc16").strip().lower()
         params = check_parameters or {}
-        poly = _to_capl_int_literal(str(params.get("poly", "0x1021")))
-        init = _to_capl_int_literal(str(params.get("init", "0xFFFF")))
-        ref_in = _to_capl_int_literal(str(params.get("refIn", "false")))
-        ref_out = _to_capl_int_literal(str(params.get("refOut", "false")))
-        xor_out = _to_capl_int_literal(str(params.get("xorOut", "0x0000")))
         lines.append("")
         lines.append(f"  {msg}.{check_signal}.raw = 0;")
         lines.append(f"  _n = {msg}.dlc;")
         lines.append("  for (_i = 0; _i < _n; _i++)")
         lines.append(f"    _data[_i] = {msg}.byte(_i);")
-        lines.append(
-            f"  _crc = ComputeCrc16(_data, _n, {poly}, {init}, {ref_in}, {ref_out}, {xor_out});"
-        )
+        if "crc" in method:
+            poly = _to_capl_int_literal(str(params.get("poly", "0x1021")))
+            init = _to_capl_int_literal(str(params.get("init", "0xFFFF")))
+            xor_out = _to_capl_int_literal(str(params.get("xorOut", "0x0000")))
+            lines.append(
+                f"  _crc = PROJ_CRC16_CCITT(_data, _n, {init}, {poly}, {xor_out});"
+            )
+        else:  # sum 校验
+            lines.append("  _crc = PROJ_Checksum(_data, _n);")
         lines.append(f"  {msg}.{check_signal}.raw = _crc;")
 
     lines.append("}")
@@ -431,39 +456,49 @@ def _build_signal_assignment(namespace: str, message_name: str, signal: SignalMo
 
 
 def _build_linkage_handlers(namespace: str, message_name: str, model: MessageModel) -> List[str]:
-    """为每个同时具备 Pv/Rv 的信号生成双向联动 on sysvar 处理器。"""
+    """为每个同时具备 Pv/Rv 的信号生成双向联动 on sysvar 处理器。
+
+    换算的 Factor/Offset 直接采用系统变量文件里的常量（生成时确定），不在运行时再读取
+    _Factor/_Offset 系统变量。
+    """
     lines: List[str] = []
     for signal in model.signals:
         if not (signal.has_pv and signal.has_rv):
             continue
+        try:
+            factor = float(signal.factor)
+        except (TypeError, ValueError):
+            factor = 1.0
+        try:
+            offset = float(signal.offset)
+        except (TypeError, ValueError):
+            offset = 0.0
+        # Factor 为 0 无法换算，跳过该信号的联动。
+        if factor == 0:
+            continue
+
         pv = _sysvar(namespace, message_name, f"{signal.name}_Pv")
         rv = _sysvar(namespace, message_name, f"{signal.name}_Rv")
-        factor = _sysvar(namespace, message_name, f"{signal.name}_Factor")
-        offset = _sysvar(namespace, message_name, f"{signal.name}_Offset")
+        factor_lit = _format_float(signal.factor, "1")
+        offset_lit = _format_float(signal.offset, "0")
         sv_pv = f"{namespace}::{message_name}.{signal.name}_Pv"
         sv_rv = f"{namespace}::{message_name}.{signal.name}_Rv"
 
-        # Pv 改变 -> 重算 Rv
+        # Pv 改变 -> 重算 Rv（Rv = round((Pv - Offset)/Factor)）
         lines.append(f"on sysvar {sv_pv}")
         lines.append("{")
-        lines.append("  double _f, _o;")
         lines.append("  long _newRv;")
-        lines.append(f"  _f = {factor};")
-        lines.append(f"  _o = {offset};")
-        lines.append("  if (_f == 0) return;")
-        lines.append(f"  _newRv = round(({pv} - _o) / _f);")
+        lines.append(f"  _newRv = round(({pv} - ({offset_lit})) / ({factor_lit}));")
         lines.append(f"  if (_newRv != {rv})")
         lines.append(f"    {rv} = _newRv;")
         lines.append("}")
         lines.append("")
 
-        # Rv 改变 -> 重算 Pv
+        # Rv 改变 -> 重算 Pv（Pv = Rv*Factor + Offset）
         lines.append(f"on sysvar {sv_rv}")
         lines.append("{")
-        lines.append("  double _f, _o, _newPv;")
-        lines.append(f"  _f = {factor};")
-        lines.append(f"  _o = {offset};")
-        lines.append(f"  _newPv = {rv} * _f + _o;")
+        lines.append("  double _newPv;")
+        lines.append(f"  _newPv = {rv} * ({factor_lit}) + ({offset_lit});")
         lines.append(f"  if (_newPv != {pv})")
         lines.append(f"    {pv} = _newPv;")
         lines.append("}")
