@@ -510,11 +510,17 @@ def _build_linkage_handlers(
         sv_pv = f"{namespace}::{message_name}.{signal.name}_Pv"
         sv_rv = f"{namespace}::{message_name}.{signal.name}_Rv"
 
-        # Pv 改变 -> 重算 Rv（Rv = round((Pv - Offset)/Factor)），并夹到 Rv 的 min/max。
+        # Pv 改变 -> 重算 Rv（Rv = 四舍五入((Pv - Offset)/Factor)），并夹到 Rv 的 min/max。
+        # CAPL 无 round()，用 (long)(x +/- 0.5) 实现四舍五入（兼容负值）。
         lines.append(f"on sysvar {sv_pv}")
         lines.append("{")
+        lines.append("  double _q;")
         lines.append("  long _newRv;")
-        lines.append(f"  _newRv = round(({pv} - ({offset_lit})) / ({factor_lit}));")
+        lines.append(f"  _q = ({pv} - ({offset_lit})) / ({factor_lit});")
+        lines.append("  if (_q >= 0)")
+        lines.append("    _newRv = (long)(_q + 0.5);")
+        lines.append("  else")
+        lines.append("    _newRv = (long)(_q - 0.5);")
         if signal.rv_min is not None and signal.rv_min != "":
             lines.append(f"  if (_newRv < {signal.rv_min})")
             lines.append(f"    _newRv = {signal.rv_min};")
