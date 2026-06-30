@@ -47,6 +47,14 @@ VSYSVAR = """<?xml version='1.0' encoding='utf-8'?>
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_inactive_value" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="4095" />
       </struct>
       <variable anlyzLocal="2" readOnly="false" valueSequence="false" unit="" name="IPB_0x10C" comment="" bitcount="512" isSigned="true" encoding="65001" type="struct" structDefinition="control::ipb_0x10c" />
+      <struct name="ipb_0x200" isUnion="False" definedBinaryLayout="False" comment="">
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_0x200_node" comment="" bitcount="0" isSigned="false" encoding="65001" type="string" startValue="IPB" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Wheel_speed_Pv" comment="" bitcount="64" isSigned="false" encoding="65001" type="float" startValue="0" minValue="0" maxValue="100" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Wheel_speed_Rv" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="200" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Wheel_speed_Factor" comment="" bitcount="64" isSigned="false" encoding="65001" type="float" startValue="0.5" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Wheel_speed_Offset" comment="" bitcount="64" isSigned="false" encoding="65001" type="float" startValue="0" />
+      </struct>
+      <variable anlyzLocal="2" readOnly="false" valueSequence="false" unit="" name="IPB_0x200" comment="" bitcount="256" isSigned="true" encoding="65001" type="struct" structDefinition="control::ipb_0x200" />
     </namespace>
   </namespace>
 </systemvariables>
@@ -86,6 +94,7 @@ def main():
                         "messages": [
                             {
                                 "message_name": "IPB_0x10C",
+                                "has_validation": True,
                                 "check_signal": "Checksum_10C_S",
                                 "counter_signal": "Counter_10C_S",
                                 "check_method": "crc16",
@@ -96,7 +105,11 @@ def main():
                                     "refOut": "false",
                                     "xorOut": "0x0000",
                                 },
-                            }
+                            },
+                            {
+                                "message_name": "IPB_0x200",
+                                "has_validation": False,
+                            },
                         ],
                     }
                 ],

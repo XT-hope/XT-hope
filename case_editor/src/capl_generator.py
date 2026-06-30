@@ -248,6 +248,14 @@ def _msg_var(message_name: str) -> str:
     return f"msg_{message_name}"
 
 
+def _counter_enabled(msg_cfg: Dict[str, Any], model: MessageModel) -> bool:
+    """该报文是否需要 counter（启用校验且 counter 信号存在于报文中）。"""
+    if not msg_cfg.get("has_validation", False):
+        return False
+    counter_signal = msg_cfg.get("counter_signal", "")
+    return bool(counter_signal) and model.get(counter_signal) is not None
+
+
 def _info_var(message_name: str) -> str:
     return f"{message_name}_Info"
 
@@ -360,27 +368,36 @@ def _build_fill_function(
     namespace: str,
     message_name: str,
     model: MessageModel,
+    has_validation: bool,
     counter_signal: str,
     check_signal: str,
     check_method: str,
     check_parameters: Dict[str, Any],
 ) -> List[str]:
-    """生成填充并发送一条报文的函数体（设置信号、counter、checksum）。"""
+    """生成填充并发送一条报文的函数体（设置信号、counter、checksum）。
+
+    仅当 has_validation 为真时才生成 counter 递增与 checksum 计算；否则只填普通信号。
+    """
     msg = _msg_var(message_name)
     cnt_var = f"cnt_{message_name}"
+
+    # 未启用校验的报文不处理 counter/checksum。
+    if not has_validation:
+        counter_signal = ""
+        check_signal = ""
+
+    has_counter = bool(counter_signal) and model.get(counter_signal) is not None
+    has_checksum = bool(check_signal) and model.get(check_signal) is not None
+    need_crc_buf = has_checksum  # 仅在需要 checksum 时声明 CRC 缓冲变量
+
     lines: List[str] = []
     lines.append(f"void fill_{message_name}()")
     lines.append("{")
-    lines.append("  byte _data[64];")
-    lines.append("  long _i, _n;")
-    lines.append("  dword _crc;")
-    lines.append("")
-
-    has_counter = bool(counter_signal) and model.get(counter_signal) is not None
-    # 若 checksum 与 counter 是同一个信号（DBC 配置异常），优先按 checksum 处理。
-    has_checksum = bool(check_signal) and model.get(check_signal) is not None
-    if has_counter and has_checksum and counter_signal == check_signal:
-        has_counter = False
+    if need_crc_buf:
+        lines.append("  byte _data[64];")
+        lines.append("  long _i, _n;")
+        lines.append("  dword _crc;")
+        lines.append("")
 
     # 1) 普通信号：special > inactive > Rv
     for signal in model.signals:
@@ -538,7 +555,8 @@ def _build_can_file(
         name = model.name
         out.append(f"  message {name} {_msg_var(name)};")
         out.append(f"  msTimer tmr_{name};")
-        out.append(f"  long cnt_{name};")
+        if _counter_enabled(msg_cfg, model):
+            out.append(f"  long cnt_{name};")
     out.append("}")
     out.append("")
 
@@ -547,11 +565,11 @@ def _build_can_file(
     out.append("{")
     for msg_cfg, model in messages:
         name = model.name
-        counter_signal = msg_cfg.get("counter_signal", "")
-        counter = model.get(counter_signal) if counter_signal else None
-        cmin = _to_capl_number(counter.rv_min, "0") if counter else "0"
         out.append(f"  {_msg_var(name)}.CAN = {channel};")
-        out.append(f"  cnt_{name} = {cmin};")
+        if _counter_enabled(msg_cfg, model):
+            counter = model.get(msg_cfg.get("counter_signal", ""))
+            cmin = _to_capl_number(counter.rv_min, "0")
+            out.append(f"  cnt_{name} = {cmin};")
         out.append(f"  arm_{name}();")
     out.append("}")
     out.append("")
@@ -567,6 +585,7 @@ def _build_can_file(
                 namespace,
                 name,
                 model,
+                bool(msg_cfg.get("has_validation", False)),
                 msg_cfg.get("counter_signal", ""),
                 msg_cfg.get("check_signal", ""),
                 msg_cfg.get("check_method", "crc16"),
