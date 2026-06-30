@@ -11,9 +11,10 @@ CAPL 生成器
 - 每个报文按系统变量进行模拟发送：
     * 节点/报文开关：<ns>_Node_On、<ns>_Node_Info.<sender>_MsgOn、<msg>_Info.<msg>_MsgOn/_MsgOff
     * 发送类型：当前仅实现 Cycle（MsgSendType == 0），周期取 <msg>_Info.<msg>_MsgCycleTime
-    * 信号取值优先级：use_special_value > use_inactive_value > Rv（均为原始值，写入 .raw）
+    * 信号取值优先级：special > inactive > 普通值；报文对象 msg.信号 赋物理值（CAPL 自动编码成 raw），
+      普通值用 Pv，special/inactive/counter/checksum 等 raw 码按 Factor/Offset 转成物理值再赋
     * counter 在 [min,max] 间递增到顶再回到 min
-    * checksum 使用通用参数化 CRC16（poly/init/refIn/refOut/xorOut）
+    * checksum 使用查表版 CRC16-CCITT 或 sum 校验
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动，并做防抖避免 on sysvar 互相触发死循环。
 """
 from __future__ import annotations
@@ -276,6 +277,23 @@ def _format_float(text: Optional[str], default: str) -> str:
         return default
 
 
+def _phys_expr(raw_expr: str, factor_lit: str, offset_lit: str) -> str:
+    """把一个 raw 值表达式转换为物理值表达式：raw*Factor + Offset。
+
+    报文对象的 msg.信号 赋的是物理值（CAPL 会自动编码成 raw 上总线），因此 raw 码
+    （special/inactive/counter/checksum 等）需先按各自 Factor/Offset 转成物理值。
+    当 Factor==1 且 Offset==0 时直接返回原表达式，保持输出简洁。
+    """
+    f = (factor_lit or "1").strip()
+    o = (offset_lit or "0").strip()
+    expr = raw_expr
+    if f not in ("1", "1.0"):
+        expr = f"({expr}) * ({f})"
+    if o not in ("0", "0.0"):
+        expr = f"{expr} + ({o})"
+    return expr
+
+
 def _to_capl_int_literal(value: str) -> str:
     """把 0x..., 'true'/'false', 十进制等规范化为 CAPL 整型字面量。"""
     v = value.strip().lower()
@@ -404,12 +422,13 @@ def _build_fill_function(
             continue
         lines.extend(_build_signal_assignment(namespace, message_name, signal))
 
-    # 2) counter：写当前值，再在 [min,max] 间递增/回绕
+    # 2) counter：写当前值（raw 计数转物理值），再在 [min,max] 间递增/回绕
     if has_counter:
         counter = model.get(counter_signal)
         cmin = _to_capl_number(counter.rv_min, "0")
         cmax = _to_capl_number(counter.rv_max, "255")
-        lines.append(f"  {msg}.{counter_signal} = {cnt_var};")
+        cnt_phys = _phys_expr(cnt_var, _format_float(counter.factor, "1"), _format_float(counter.offset, "0"))
+        lines.append(f"  {msg}.{counter_signal} = {cnt_phys};")
         lines.append(f"  if ({cnt_var} >= {cmax})")
         lines.append(f"    {cnt_var} = {cmin};")
         lines.append("  else")
@@ -421,8 +440,13 @@ def _build_fill_function(
     if has_checksum:
         method = (check_method or "crc16").strip().lower()
         params = check_parameters or {}
+        chk = model.get(check_signal)
+        chk_factor = _format_float(chk.factor, "1")
+        chk_offset = _format_float(chk.offset, "0")
+        crc_phys = _phys_expr("_crc", chk_factor, chk_offset)
         lines.append("")
-        lines.append(f"  {msg}.{check_signal} = 0;")
+        # 清零：物理值取 Offset 使该字段的 raw 为 0（Offset 通常为 0）。
+        lines.append(f"  {msg}.{check_signal} = {chk_offset};")
         lines.append(f"  _n = {msg}.dlc;")
         lines.append("  for (_i = 0; _i < _n; _i++)")
         lines.append(f"    _data[_i] = {msg}.byte(_i);")
@@ -435,7 +459,7 @@ def _build_fill_function(
             )
         else:  # sum 校验
             lines.append("  _crc = PROJ_Checksum(_data, _n);")
-        lines.append(f"  {msg}.{check_signal} = _crc;")
+        lines.append(f"  {msg}.{check_signal} = {crc_phys};")
 
     lines.append("}")
     lines.append("")
@@ -444,26 +468,39 @@ def _build_fill_function(
 
 def _build_signal_assignment(namespace: str, message_name: str, signal: SignalModel) -> List[str]:
     msg = _msg_var(message_name)
-    rv = _sysvar(namespace, message_name, f"{signal.name}_Rv")
-    # 报文对象的 msg.信号 即原始值(raw)，不能再加 .raw（否则 CANoe 报 invalid expression）。
+    # 报文对象的 msg.信号 赋的是物理值，CAPL 会按 DBC 自动编码成 raw 上总线。
     target = f"{msg}.{signal.name}"
-    lines: List[str] = []
+    factor_lit = _format_float(signal.factor, "1")
+    offset_lit = _format_float(signal.offset, "0")
 
+    # 普通取值用物理值 Pv；无 Pv 成员时退回用 Rv 换算成物理值。
+    if signal.has_pv:
+        normal_value = _sysvar(namespace, message_name, f"{signal.name}_Pv")
+    else:
+        rv = _sysvar(namespace, message_name, f"{signal.name}_Rv")
+        normal_value = _phys_expr(rv, factor_lit, offset_lit)
+
+    lines: List[str] = []
     branches: List[Tuple[str, str]] = []
     # special 优先级高于 inactive：需同时满足“定义了该值(has_*==1)”且“启用(use_*==1)”。
+    # special/inactive 在系统变量里是 raw 码，需转成物理值再赋给报文信号。
     if signal.has_special_value:
         has_special = _sysvar(namespace, message_name, f"{signal.name}_has_special_value")
         use_special = _sysvar(namespace, message_name, f"{signal.name}_use_special_value")
         special_value = _sysvar(namespace, message_name, f"{signal.name}_special_value")
-        branches.append((f"{has_special} == 1 && {use_special} == 1", special_value))
+        branches.append(
+            (f"{has_special} == 1 && {use_special} == 1", _phys_expr(special_value, factor_lit, offset_lit))
+        )
     if signal.has_inactive_value:
         has_inactive = _sysvar(namespace, message_name, f"{signal.name}_has_inactive_value")
         use_inactive = _sysvar(namespace, message_name, f"{signal.name}_use_inactive_value")
         inactive_value = _sysvar(namespace, message_name, f"{signal.name}_inactive_value")
-        branches.append((f"{has_inactive} == 1 && {use_inactive} == 1", inactive_value))
+        branches.append(
+            (f"{has_inactive} == 1 && {use_inactive} == 1", _phys_expr(inactive_value, factor_lit, offset_lit))
+        )
 
     if not branches:
-        lines.append(f"  {target} = {rv};")
+        lines.append(f"  {target} = {normal_value};")
         return lines
 
     for idx, (cond, value) in enumerate(branches):
@@ -471,7 +508,7 @@ def _build_signal_assignment(namespace: str, message_name: str, signal: SignalMo
         lines.append(f"  {keyword} ({cond})")
         lines.append(f"    {target} = {value};")
     lines.append("  else")
-    lines.append(f"    {target} = {rv};")
+    lines.append(f"    {target} = {normal_value};")
     return lines
 
 
