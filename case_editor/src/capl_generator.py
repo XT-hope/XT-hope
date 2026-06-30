@@ -409,7 +409,7 @@ def _build_fill_function(
         counter = model.get(counter_signal)
         cmin = _to_capl_number(counter.rv_min, "0")
         cmax = _to_capl_number(counter.rv_max, "255")
-        lines.append(f"  {msg}.{counter_signal}.raw = {cnt_var};")
+        lines.append(f"  {msg}.{counter_signal} = {cnt_var};")
         lines.append(f"  if ({cnt_var} >= {cmax})")
         lines.append(f"    {cnt_var} = {cmin};")
         lines.append("  else")
@@ -422,7 +422,7 @@ def _build_fill_function(
         method = (check_method or "crc16").strip().lower()
         params = check_parameters or {}
         lines.append("")
-        lines.append(f"  {msg}.{check_signal}.raw = 0;")
+        lines.append(f"  {msg}.{check_signal} = 0;")
         lines.append(f"  _n = {msg}.dlc;")
         lines.append("  for (_i = 0; _i < _n; _i++)")
         lines.append(f"    _data[_i] = {msg}.byte(_i);")
@@ -435,7 +435,7 @@ def _build_fill_function(
             )
         else:  # sum 校验
             lines.append("  _crc = PROJ_Checksum(_data, _n);")
-        lines.append(f"  {msg}.{check_signal}.raw = _crc;")
+        lines.append(f"  {msg}.{check_signal} = _crc;")
 
     lines.append("}")
     lines.append("")
@@ -445,7 +445,8 @@ def _build_fill_function(
 def _build_signal_assignment(namespace: str, message_name: str, signal: SignalModel) -> List[str]:
     msg = _msg_var(message_name)
     rv = _sysvar(namespace, message_name, f"{signal.name}_Rv")
-    target = f"{msg}.{signal.name}.raw"
+    # 报文对象的 msg.信号 即原始值(raw)，不能再加 .raw（否则 CANoe 报 invalid expression）。
+    target = f"{msg}.{signal.name}"
     lines: List[str] = []
 
     branches: List[Tuple[str, str]] = []
