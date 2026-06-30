@@ -450,14 +450,17 @@ def _build_signal_assignment(namespace: str, message_name: str, signal: SignalMo
     lines: List[str] = []
 
     branches: List[Tuple[str, str]] = []
+    # special 优先级高于 inactive：需同时满足“定义了该值(has_*==1)”且“启用(use_*==1)”。
     if signal.has_special_value:
+        has_special = _sysvar(namespace, message_name, f"{signal.name}_has_special_value")
         use_special = _sysvar(namespace, message_name, f"{signal.name}_use_special_value")
         special_value = _sysvar(namespace, message_name, f"{signal.name}_special_value")
-        branches.append((f"{use_special} == 1", special_value))
+        branches.append((f"{has_special} == 1 && {use_special} == 1", special_value))
     if signal.has_inactive_value:
+        has_inactive = _sysvar(namespace, message_name, f"{signal.name}_has_inactive_value")
         use_inactive = _sysvar(namespace, message_name, f"{signal.name}_use_inactive_value")
         inactive_value = _sysvar(namespace, message_name, f"{signal.name}_inactive_value")
-        branches.append((f"{use_inactive} == 1", inactive_value))
+        branches.append((f"{has_inactive} == 1 && {use_inactive} == 1", inactive_value))
 
     if not branches:
         lines.append(f"  {target} = {rv};")
