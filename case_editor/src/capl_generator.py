@@ -717,3 +717,40 @@ def generate_capl(config: Dict[str, Any], project_path) -> List[str]:
             generated.append(str(file_path))
 
     return generated
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="根据系统变量(.vsysvar)为各发送节点生成 CANoe CAPL(.can) 文件"
+    )
+    parser.add_argument(
+        "--project",
+        required=True,
+        help=r"项目根目录，例如 D:\Test\case_editor\projects\proj1",
+    )
+    parser.add_argument(
+        "--config",
+        help="config 的 JSON 文件路径（内容为传给 generate_capl 的 config 字典）",
+    )
+    parser.add_argument(
+        "--sysvar",
+        help="可选：直接指定 .vsysvar 路径，覆盖 config 里的 selected_system_variable_file",
+    )
+    args = parser.parse_args()
+
+    # 读取 config：优先用 --config 指定的 JSON 文件，否则构造一个仅含系统变量文件的空配置。
+    if args.config:
+        with open(args.config, "r", encoding="utf-8") as fh:
+            run_config: Dict[str, Any] = json.load(fh)
+    else:
+        run_config = {"dbc_configs": [], "selected_system_variable_file": args.sysvar or ""}
+
+    if args.sysvar:
+        run_config["selected_system_variable_file"] = args.sysvar
+
+    generated_files = generate_capl(run_config, args.project)
+    print(f"共生成 {len(generated_files)} 个 .can 文件：")
+    for generated_file in generated_files:
+        print("  ", generated_file)
