@@ -484,11 +484,17 @@ def _build_linkage_handlers(namespace: str, message_name: str, model: MessageMod
         sv_pv = f"{namespace}::{message_name}.{signal.name}_Pv"
         sv_rv = f"{namespace}::{message_name}.{signal.name}_Rv"
 
-        # Pv 改变 -> 重算 Rv（Rv = round((Pv - Offset)/Factor)）
+        # Pv 改变 -> 重算 Rv（Rv = round((Pv - Offset)/Factor)），并夹到 Rv 的 min/max。
         lines.append(f"on sysvar {sv_pv}")
         lines.append("{")
         lines.append("  long _newRv;")
         lines.append(f"  _newRv = round(({pv} - ({offset_lit})) / ({factor_lit}));")
+        if signal.rv_min is not None and signal.rv_min != "":
+            lines.append(f"  if (_newRv < {signal.rv_min})")
+            lines.append(f"    _newRv = {signal.rv_min};")
+        if signal.rv_max is not None and signal.rv_max != "":
+            lines.append(f"  if (_newRv > {signal.rv_max})")
+            lines.append(f"    _newRv = {signal.rv_max};")
         lines.append(f"  if (_newRv != {rv})")
         lines.append(f"    {rv} = _newRv;")
         lines.append("}")
