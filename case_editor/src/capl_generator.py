@@ -472,14 +472,23 @@ def _build_signal_assignment(namespace: str, message_name: str, signal: SignalMo
     return lines
 
 
-def _build_linkage_handlers(namespace: str, message_name: str, model: MessageModel) -> List[str]:
+def _build_linkage_handlers(
+    namespace: str,
+    message_name: str,
+    model: MessageModel,
+    exclude: Optional[set] = None,
+) -> List[str]:
     """为每个同时具备 Pv/Rv 的信号生成双向联动 on sysvar 处理器。
 
     换算的 Factor/Offset 直接采用系统变量文件里的常量（生成时确定），不在运行时再读取
-    _Factor/_Offset 系统变量。
+    _Factor/_Offset 系统变量。exclude 中的信号（如 checksum/counter，由程序自动计算、
+    不接受外部输入）不生成联动。
     """
+    exclude = exclude or set()
     lines: List[str] = []
     for signal in model.signals:
+        if signal.name in exclude:
+            continue
         if not (signal.has_pv and signal.has_rv):
             continue
         try:
@@ -593,9 +602,15 @@ def _build_can_file(
             )
         )
 
-    # Pv/Rv 联动
+    # Pv/Rv 联动（跳过 checksum/counter 这类程序自动计算、不接受外部输入的信号）
     for msg_cfg, model in messages:
-        out.extend(_build_linkage_handlers(namespace, model.name, model))
+        exclude = set()
+        if msg_cfg.get("has_validation", False):
+            for key in ("check_signal", "counter_signal"):
+                sig = msg_cfg.get(key, "")
+                if sig:
+                    exclude.add(sig)
+        out.extend(_build_linkage_handlers(namespace, model.name, model, exclude))
 
     return "\n".join(out) + "\n"
 
