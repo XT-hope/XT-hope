@@ -24,6 +24,10 @@ VSYSVAR = """<?xml version='1.0' encoding='utf-8'?>
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_0x10C_MsgOff" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_0x10C_MsgSendType" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="5" />
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_0x10C_MsgCycleTime" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="10" minValue="0" maxValue="65535" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_0x10C_MsgCycleTimeFast" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="5" minValue="0" maxValue="65535" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_0x10C_MsgNrOfRepetition" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="3" minValue="0" maxValue="255" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_0x10C_WrongCRCFlag" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_0x10C_WrongCounterFlag" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
       </struct>
       <variable anlyzLocal="2" readOnly="false" valueSequence="false" unit="" name="IPB_0x10C_Info" comment="" bitcount="128" isSigned="true" encoding="65001" type="struct" structDefinition="control::ipb_0x10c_info" />
       <struct name="ipb_0x10c" isUnion="False" definedBinaryLayout="False" comment="">
@@ -45,6 +49,13 @@ VSYSVAR = """<?xml version='1.0' encoding='utf-8'?>
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_has_inactive_value" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="1" minValue="0" maxValue="1" />
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_use_inactive_value" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_inactive_value" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="4095" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_SigSendType" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="2">
+          <valuetable defineMinMax="false" defineStartValue="false">
+            <valuetableentry value="0" description="Cycle" />
+            <valuetableentry value="1" description="OnChange" />
+            <valuetableentry value="2" description="OnWrite" />
+          </valuetable>
+        </structMember>
       </struct>
       <variable anlyzLocal="2" readOnly="false" valueSequence="false" unit="" name="IPB_0x10C" comment="" bitcount="512" isSigned="true" encoding="65001" type="struct" structDefinition="control::ipb_0x10c" />
       <struct name="ipb_0x200" isUnion="False" definedBinaryLayout="False" comment="">
@@ -132,10 +143,18 @@ def main():
 
     print("\n=== generate_capl ===")
     files = generate_capl(config, base)
+    capl_text = ""
     for f in files:
         print("generated:", f)
+        capl_text = Path(f).read_text(encoding="utf-8")
         print("-" * 60)
-        print(Path(f).read_text(encoding="utf-8"))
+        print(capl_text)
+
+    assert "use_inactive_value" not in capl_text
+    assert "WrongCRCFlag" in capl_text
+    assert "WrongCounterFlag" in capl_text
+    assert "MsgNrOfRepetition" in capl_text
+    print("\n=== assertions passed ===")
 
 
 if __name__ == "__main__":

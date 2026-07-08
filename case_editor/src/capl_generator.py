@@ -5,16 +5,13 @@ CAPL 生成器
 为每个发送节点生成一个独立的 CANoe CAPL 节点文件（.can）。
 
 设计要点：
-- 信号清单与元数据（Factor/Offset、Rv 的 min/max、是否有 special/inactive）全部从
+- 信号清单与元数据（Factor/Offset、Rv 的 min/max、special、SigSendType 等）全部从
   .vsysvar 文件解析得到，运行时不依赖原始 DBC。
 - CAN 通道号从项目的 project.json -> canoe.dbc_files 读取（channel 为 0 基，实际通道 = channel + 1）。
-- 每个报文按系统变量进行模拟发送：
-    * 节点/报文开关：<ns>_Node_On、<ns>_Node_Info.<sender>_MsgOn、<msg>_Info.<msg>_MsgOn/_MsgOff
-    * 发送类型：当前仅实现 Cycle（MsgSendType == 0），周期取 <msg>_Info.<msg>_MsgCycleTime
-    * 信号取值优先级：special > inactive > 普通值；报文对象 msg.信号 赋物理值（CAPL 自动编码成 raw），
-      普通值用 Pv，special/inactive/counter/checksum 等 raw 码按 Factor/Offset 转成物理值再赋
-    * counter 在 [min,max] 间递增到顶再回到 min
-    * checksum 使用查表版 CRC16-CCITT 或 sum 校验
+- 每个报文按系统变量进行模拟发送，支持 MsgSendType：
+    Cycle / Event / IfActive / CE / CA（数值与 DBC GenMsgSendType 一致：0~4）。
+- 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；报文对象 msg.信号 赋物理值。
+- counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动，并做防抖避免 on sysvar 互相触发死循环。
 """
 from __future__ import annotations
@@ -30,6 +27,13 @@ from xml.etree import ElementTree as ET
 # 数据模型
 # ----------------------------------------------------------------------------
 
+# MsgSendType 数值（与 DBC GenMsgSendType / .vsysvar valuetable 一致）
+MSG_SEND_CYCLE = 0
+MSG_SEND_EVENT = 1
+MSG_SEND_IF_ACTIVE = 2
+MSG_SEND_CE = 3
+MSG_SEND_CA = 4
+
 # 单个信号在 .vsysvar 报文结构里的成员后缀（带前导下划线）。
 # 注意：匹配时必须按“长后缀优先”，否则 _special_value 会错误命中 _has_special_value。
 _SIGNAL_SUFFIXES = [
@@ -39,11 +43,15 @@ _SIGNAL_SUFFIXES = [
     "_use_inactive_value",
     "_special_value",
     "_inactive_value",
+    "_SigSendType",
     "_Factor",
     "_Offset",
     "_Pv",
     "_Rv",
 ]
+
+# 参与 Event/CE 触发监听的信号成员后缀（不含 Factor/Offset/has_*/SigSendType 等元数据）
+_WATCHABLE_SUFFIXES = ("_Pv", "_Rv", "_use_special_value")
 
 
 @dataclass
@@ -55,10 +63,25 @@ class SignalModel:
     rv_min: Optional[str] = None
     rv_max: Optional[str] = None
     pv_is_int: bool = True
-    has_special_value: bool = False   # 是否存在 _special_value 成员
-    has_inactive_value: bool = False  # 是否存在 _inactive_value 成员
+    has_special_value: bool = False
+    has_inactive_value: bool = False  # 用于 IfActive/CA 判定，不参与赋值
+    inactive_raw: Optional[str] = None
     has_pv: bool = False
     has_rv: bool = False
+    has_sig_send_type: bool = False
+    sig_send_type_choices: Dict[int, str] = field(default_factory=dict)
+
+
+@dataclass
+class MessageInfoModel:
+    """报文 *_Info 结构中的发送控制字段。"""
+    message_name: str
+    has_msg_send_type: bool = False
+    has_msg_cycle_time: bool = False
+    has_msg_cycle_time_fast: bool = False
+    has_msg_nr_of_repetition: bool = False
+    has_wrong_crc_flag: bool = False
+    has_wrong_counter_flag: bool = False
 
 
 @dataclass
@@ -67,6 +90,7 @@ class MessageModel:
     name: str
     signals: List[SignalModel] = field(default_factory=list)
     signal_index: Dict[str, SignalModel] = field(default_factory=dict)
+    info: Optional[MessageInfoModel] = None
 
     def get(self, signal_name: str) -> Optional[SignalModel]:
         return self.signal_index.get(signal_name)
@@ -76,8 +100,9 @@ class MessageModel:
 class ParsedSysvar:
     """.vsysvar 解析结果。"""
     messages: Dict[str, MessageModel] = field(default_factory=dict)
-    variable_names: set = field(default_factory=set)   # 所有 variable 的名称
-    member_names: set = field(default_factory=set)      # 所有 structMember 的名称
+    message_infos: Dict[str, MessageInfoModel] = field(default_factory=dict)
+    variable_names: set = field(default_factory=set)
+    member_names: set = field(default_factory=set)
 
 
 # ----------------------------------------------------------------------------
@@ -90,6 +115,66 @@ def _split_signal_member(member_name: str) -> Optional[Tuple[str, str]]:
         if member_name.endswith(suffix):
             return member_name[: -len(suffix)], suffix
     return None
+
+
+def _parse_value_table(member: ET.Element) -> Dict[int, str]:
+    """从 structMember 子节点 valuetable 解析 {数值: 描述}。"""
+    table: Dict[int, str] = {}
+    vt = member.find("valuetable")
+    if vt is None:
+        return table
+    for entry in vt.findall("valuetableentry"):
+        value_text = entry.get("value", "")
+        desc = entry.get("description", "") or entry.get("name", "") or ""
+        try:
+            if value_text.strip().lower().startswith("0x"):
+                key = int(value_text.strip(), 16)
+            else:
+                key = int(float(value_text))
+        except (TypeError, ValueError):
+            continue
+        table[key] = desc.strip()
+    return table
+
+
+def _choice_value_by_name(choices: Dict[int, str], *names: str) -> Optional[int]:
+    """按名称（不区分大小写、忽略空格）在 valuetable 中查找数值。"""
+    targets = {n.lower().replace(" ", "").replace("_", "") for n in names}
+    for value, desc in choices.items():
+        normalized = desc.lower().replace(" ", "").replace("_", "")
+        if normalized in targets:
+            return value
+    return None
+
+
+def _resolve_sig_send_types(choices: Dict[int, str]) -> Tuple[int, int, int]:
+    """解析 SigSendType valuetable，返回 (cycle, on_change, on_write) 的数值。"""
+    cycle = _choice_value_by_name(choices, "Cycle", "Cyclic", "cycle", "cyclic")
+    on_change = _choice_value_by_name(choices, "OnChange", "onchange")
+    on_write = _choice_value_by_name(choices, "OnWrite", "onwrite")
+    return cycle if cycle is not None else 0, on_change if on_change is not None else 1, on_write if on_write is not None else 2
+
+
+def _build_message_info_model(message_name: str, members: List[ET.Element]) -> MessageInfoModel:
+    model = MessageInfoModel(message_name=message_name)
+    prefix = f"{message_name}_"
+    for member in members:
+        name = member.get("name", "")
+        if not name.startswith(prefix):
+            continue
+        if name == f"{message_name}_MsgSendType":
+            model.has_msg_send_type = True
+        elif name == f"{message_name}_MsgCycleTime":
+            model.has_msg_cycle_time = True
+        elif name == f"{message_name}_MsgCycleTimeFast":
+            model.has_msg_cycle_time_fast = True
+        elif name == f"{message_name}_MsgNrOfRepetition":
+            model.has_msg_nr_of_repetition = True
+        elif name == f"{message_name}_WrongCRCFlag":
+            model.has_wrong_crc_flag = True
+        elif name == f"{message_name}_WrongCounterFlag":
+            model.has_wrong_counter_flag = True
+    return model
 
 
 def parse_vsysvar(vsysvar_path: str) -> ParsedSysvar:
@@ -121,7 +206,25 @@ def parse_vsysvar(vsysvar_path: str) -> ParsedSysvar:
         if name:
             result.variable_names.add(name)
 
-    # 2) 找到所有“报文数据变量”：type=struct 且 structDefinition 指向的 struct 名
+    # 解析 *_Info 结构（报文发送控制字段）
+    for variable in root.iter("variable"):
+        if variable.get("type") != "struct":
+            continue
+        var_name = variable.get("name", "")
+        if not var_name.endswith("_Info"):
+            continue
+        struct_def = variable.get("structDefinition", "")
+        if not struct_def:
+            continue
+        struct_simple = struct_def.split("::")[-1].lower()
+        members = structs.get(struct_simple)
+        if members is None:
+            continue
+        msg_name = var_name[: -len("_Info")]
+        info_model = _build_message_info_model(msg_name, members)
+        result.message_infos[msg_name] = info_model
+
+    # 2) 找到所有“报文数据变量”
     #    等于变量名的小写（报文数据结构命名规则为 message.name.lower()）。
     for variable in root.iter("variable"):
         if variable.get("type") != "struct":
@@ -139,6 +242,7 @@ def parse_vsysvar(vsysvar_path: str) -> ParsedSysvar:
             continue
         model = _build_message_model(var_name, members)
         if model.signals:
+            model.info = result.message_infos.get(var_name)
             result.messages[var_name] = model
     return result
 
@@ -181,6 +285,10 @@ def _apply_member(signal: SignalModel, suffix: str, member: ET.Element) -> None:
         signal.has_special_value = True
     elif suffix == "_inactive_value":
         signal.has_inactive_value = True
+        signal.inactive_raw = member.get("startValue")
+    elif suffix == "_SigSendType":
+        signal.has_sig_send_type = True
+        signal.sig_send_type_choices = _parse_value_table(member)
 
 
 def _read_text_any_encoding(path: str) -> str:
@@ -258,6 +366,16 @@ def _counter_enabled(msg_cfg: Dict[str, Any], model: MessageModel) -> bool:
 
 def _info_var(message_name: str) -> str:
     return f"{message_name}_Info"
+
+
+def _info_member_exists(parsed: ParsedSysvar, message_name: str, suffix: str) -> bool:
+    return f"{message_name}{suffix}" in parsed.member_names
+
+
+def _info_sysvar(namespace: str, message_name: str, member: str, parsed: ParsedSysvar, default: str) -> str:
+    if _info_member_exists(parsed, message_name, member):
+        return _sysvar(namespace, _info_var(message_name), f"{message_name}{member}")
+    return default
 
 
 def _to_capl_number(text: Optional[str], default: str) -> str:
@@ -385,6 +503,7 @@ def _build_fill_function(
     namespace: str,
     message_name: str,
     model: MessageModel,
+    parsed: ParsedSysvar,
     has_validation: bool,
     counter_signal: str,
     check_signal: str,
@@ -416,19 +535,24 @@ def _build_fill_function(
         lines.append("  dword _crc;")
         lines.append("")
 
-    # 1) 普通信号：special > inactive > Rv
+    # 1) 普通信号：special > 普通值（不再使用 inactive 赋值）
     for signal in model.signals:
         if signal.name in (counter_signal, check_signal):
             continue
         lines.extend(_build_signal_assignment(namespace, message_name, signal))
 
-    # 2) counter：写当前值（raw 计数转物理值），再在 [min,max] 间递增/回绕
+    # 2) counter：写当前值，再递增；WrongCounterFlag==1 时在结果上 +1
     if has_counter:
         counter = model.get(counter_signal)
         cmin = _to_capl_number(counter.rv_min, "0")
         cmax = _to_capl_number(counter.rv_max, "255")
         cnt_phys = _phys_expr(cnt_var, _format_float(counter.factor, "1"), _format_float(counter.offset, "0"))
-        lines.append(f"  {msg}.{counter_signal} = {cnt_phys};")
+        wrong_counter = _info_sysvar(namespace, message_name, "_WrongCounterFlag", parsed, "0")
+        if model.info and model.info.has_wrong_counter_flag:
+            cnt_assign = f"({cnt_phys}) + (({wrong_counter} == 1) ? 1 : 0)"
+        else:
+            cnt_assign = cnt_phys
+        lines.append(f"  {msg}.{counter_signal} = {cnt_assign};")
         lines.append(f"  if ({cnt_var} >= {cmax})")
         lines.append(f"    {cnt_var} = {cmin};")
         lines.append("  else")
@@ -457,8 +581,12 @@ def _build_fill_function(
             lines.append(
                 f"  _crc = PROJ_CRC16_CCITT(_data, _n, {init}, {poly}, {xor_out});"
             )
-        else:  # sum 校验
+        else:
             lines.append("  _crc = PROJ_Checksum(_data, _n);")
+        wrong_crc = _info_sysvar(namespace, message_name, "_WrongCRCFlag", parsed, "0")
+        if model.info and model.info.has_wrong_crc_flag:
+            lines.append(f"  if ({wrong_crc} == 1)")
+            lines.append("    _crc = _crc + 1;")
         lines.append(f"  {msg}.{check_signal} = {crc_phys};")
 
     lines.append("}")
@@ -482,21 +610,13 @@ def _build_signal_assignment(namespace: str, message_name: str, signal: SignalMo
 
     lines: List[str] = []
     branches: List[Tuple[str, str]] = []
-    # special 优先级高于 inactive：需同时满足“定义了该值(has_*==1)”且“启用(use_*==1)”。
-    # special/inactive 在系统变量里是 raw 码，需转成物理值再赋给报文信号。
+    # special：需同时满足 has_special_value==1 且 use_special_value==1。
     if signal.has_special_value:
         has_special = _sysvar(namespace, message_name, f"{signal.name}_has_special_value")
         use_special = _sysvar(namespace, message_name, f"{signal.name}_use_special_value")
         special_value = _sysvar(namespace, message_name, f"{signal.name}_special_value")
         branches.append(
             (f"{has_special} == 1 && {use_special} == 1", _phys_expr(special_value, factor_lit, offset_lit))
-        )
-    if signal.has_inactive_value:
-        has_inactive = _sysvar(namespace, message_name, f"{signal.name}_has_inactive_value")
-        use_inactive = _sysvar(namespace, message_name, f"{signal.name}_use_inactive_value")
-        inactive_value = _sysvar(namespace, message_name, f"{signal.name}_inactive_value")
-        branches.append(
-            (f"{has_inactive} == 1 && {use_inactive} == 1", _phys_expr(inactive_value, factor_lit, offset_lit))
         )
 
     if not branches:
@@ -509,6 +629,235 @@ def _build_signal_assignment(namespace: str, message_name: str, signal: SignalMo
         lines.append(f"    {target} = {value};")
     lines.append("  else")
     lines.append(f"    {target} = {normal_value};")
+    return lines
+
+
+def _shadow_var(message_name: str, member_name: str) -> str:
+    return f"g_prev_{message_name}_{member_name}"
+
+
+def _restore_var(message_name: str, member_name: str) -> str:
+    return f"g_restore_{message_name}_{member_name}"
+
+
+def _capl_member_type(signal: SignalModel, suffix: str) -> str:
+    if suffix == "_Pv":
+        return "int" if signal.pv_is_int else "float"
+    if suffix == "_Rv":
+        return "long"
+    return "long"
+
+
+def _watchable_members(
+    model: MessageModel,
+    exclude: Optional[set] = None,
+) -> List[Tuple[SignalModel, str]]:
+    """返回需要监听变化的 (信号, 后缀) 列表。"""
+    exclude = exclude or set()
+    items: List[Tuple[SignalModel, str]] = []
+    for signal in model.signals:
+        if signal.name in exclude:
+            continue
+        for suffix in _WATCHABLE_SUFFIXES:
+            member = f"{signal.name}{suffix}"
+            if suffix == "_Pv" and signal.has_pv:
+                items.append((signal, suffix))
+            elif suffix == "_Rv" and signal.has_rv:
+                items.append((signal, suffix))
+            elif suffix == "_use_special_value" and signal.has_special_value:
+                items.append((signal, suffix))
+    return items
+
+
+def _inactive_phys_expr(namespace: str, message_name: str, signal: SignalModel) -> str:
+    inactive_raw = _sysvar(namespace, message_name, f"{signal.name}_inactive_value")
+    return _phys_expr(inactive_raw, _format_float(signal.factor, "1"), _format_float(signal.offset, "0"))
+
+
+def _inactive_raw_expr(namespace: str, message_name: str, signal: SignalModel) -> str:
+    return _sysvar(namespace, message_name, f"{signal.name}_inactive_value")
+
+
+def _restore_pending_var(message_name: str, member_name: str) -> str:
+    return f"restore_pending_{message_name}_{member_name}"
+
+
+def _build_burst_variables(message_name: str, model: MessageModel, exclude: Optional[set] = None) -> List[str]:
+    lines = [
+        f"  long burst_left_{message_name};",
+        f"  long burst_fast_{message_name};",
+    ]
+    for signal, suffix in _watchable_members(model, exclude):
+        member = f"{signal.name}{suffix}"
+        capl_type = _capl_member_type(signal, suffix)
+        lines.append(f"  {capl_type} {_shadow_var(message_name, member)};")
+        lines.append(f"  {capl_type} {_restore_var(message_name, member)};")
+        lines.append(f"  long {_restore_pending_var(message_name, member)};")
+    return lines
+
+
+def _build_init_shadows(namespace: str, message_name: str, model: MessageModel, exclude: Optional[set] = None) -> List[str]:
+    lines: List[str] = []
+    for signal, suffix in _watchable_members(model, exclude):
+        member = f"{signal.name}{suffix}"
+        sv = _sysvar(namespace, message_name, member)
+        lines.append(f"  {_shadow_var(message_name, member)} = {sv};")
+    return lines
+
+
+def _build_begin_burst_function(namespace: str, message_name: str, parsed: ParsedSysvar) -> List[str]:
+    info = _info_var(message_name)
+    rep = _info_sysvar(namespace, message_name, "_MsgNrOfRepetition", parsed, "1")
+    return [
+        f"void begin_burst_{message_name}(long use_fast)",
+        "{",
+        f"  burst_left_{message_name} = {rep};",
+        "  if (burst_left_{0} <= 0)".format(message_name),
+        f"    burst_left_{message_name} = 1;",
+        f"  burst_fast_{message_name} = use_fast;",
+        f"  cancelTimer(tmr_{message_name});",
+        f"  send_{message_name}();",
+        f"  burst_left_{message_name}--;",
+        f"  if (burst_left_{message_name} > 0)",
+        f"    arm_{message_name}();",
+        "  else",
+        f"    finish_burst_{message_name}();",
+        "}",
+        "",
+    ]
+
+
+def _build_finish_burst_function(
+    namespace: str,
+    message_name: str,
+    model: MessageModel,
+    parsed: ParsedSysvar,
+    exclude: Optional[set] = None,
+) -> List[str]:
+    send_type_expr = _info_sysvar(namespace, message_name, "_MsgSendType", parsed, str(MSG_SEND_CYCLE))
+    lines = [f"void finish_burst_{message_name}()", "{"]
+    for signal, suffix in _watchable_members(model, exclude):
+        member = f"{signal.name}{suffix}"
+        pending = _restore_pending_var(message_name, member)
+        sv = _sysvar(namespace, message_name, member)
+        lines.append(f"  if ({pending})")
+        lines.append("  {")
+        lines.append(f"    {sv} = {_restore_var(message_name, member)};")
+        lines.append(f"    {_shadow_var(message_name, member)} = {_restore_var(message_name, member)};")
+        lines.append(f"    {pending} = 0;")
+        lines.append("  }")
+    lines.append(f"  burst_fast_{message_name} = 0;")
+    lines.append(f"  if ({send_type_expr} == {MSG_SEND_EVENT} || {send_type_expr} == {MSG_SEND_IF_ACTIVE})")
+    lines.append("    return;")
+    lines.append(f"  arm_{message_name}();")
+    lines.append("}")
+    lines.append("")
+    return lines
+
+
+def _build_trigger_handlers(
+    namespace: str,
+    message_name: str,
+    model: MessageModel,
+    parsed: ParsedSysvar,
+    exclude: Optional[set] = None,
+) -> List[str]:
+    """为 Event / CE / IfActive / CA 生成 on sysvar 触发处理器。"""
+    exclude = exclude or set()
+    info = model.info
+    if info is None or not info.has_msg_send_type:
+        return []
+
+    send_type_expr = _info_sysvar(namespace, message_name, "_MsgSendType", parsed, str(MSG_SEND_CYCLE))
+    lines: List[str] = []
+
+    for signal, suffix in _watchable_members(model, exclude):
+        member = f"{signal.name}{suffix}"
+        sv_path = f"{namespace}::{message_name}.{member}"
+        sv = _sysvar(namespace, message_name, member)
+        shadow = _shadow_var(message_name, member)
+        capl_type = _capl_member_type(signal, suffix)
+
+        sig_send_type_expr = None
+        cycle_type, on_change_type, on_write_type = 0, 1, 2
+        if signal.has_sig_send_type:
+            sig_send_type_expr = _sysvar(namespace, message_name, f"{signal.name}_SigSendType")
+            cycle_type, on_change_type, on_write_type = _resolve_sig_send_types(signal.sig_send_type_choices)
+
+        inactive_cmp = None
+        if signal.has_inactive_value and suffix in ("_Pv", "_Rv"):
+            if suffix == "_Pv":
+                inactive_cmp = f"_new != ({_inactive_phys_expr(namespace, message_name, signal)})"
+            else:
+                inactive_cmp = f"_new != ({_inactive_raw_expr(namespace, message_name, signal)})"
+
+        lines.append(f"on sysvar {sv_path}")
+        lines.append("{")
+        lines.append(f"  {capl_type} _old, _new;")
+        lines.append("  long _triggered, _use_fast;")
+        lines.append(f"  _old = {shadow};")
+        lines.append(f"  _new = {sv};")
+        lines.append("  _triggered = 0;")
+        lines.append("  _use_fast = 0;")
+
+        # Event
+        lines.append(f"  if ({send_type_expr} == {MSG_SEND_EVENT} && _old != _new)")
+        lines.append("  {")
+        lines.append("    _triggered = 1;")
+        lines.append("    _use_fast = 0;")
+        lines.append("  }")
+
+        # IfActive
+        if inactive_cmp:
+            lines.append(
+                f"  else if ({send_type_expr} == {MSG_SEND_IF_ACTIVE} && _old != _new && ({inactive_cmp}))"
+            )
+            lines.append("  {")
+            lines.append("    _triggered = 1;")
+            lines.append("    _use_fast = 0;")
+            lines.append("  }")
+
+        # CE
+        if sig_send_type_expr:
+            lines.append(
+                f"  else if ({send_type_expr} == {MSG_SEND_CE} && {sig_send_type_expr} == {on_change_type}"
+                f" && _old != _new)"
+            )
+            lines.append("  {")
+            lines.append("    _triggered = 1;")
+            lines.append("    _use_fast = 1;")
+            lines.append("  }")
+            lines.append(
+                f"  else if ({send_type_expr} == {MSG_SEND_CE} && {sig_send_type_expr} == {on_write_type})"
+            )
+            lines.append("  {")
+            lines.append("    _triggered = 1;")
+            lines.append("    _use_fast = 1;")
+            lines.append("  }")
+
+        # CA
+        if inactive_cmp and sig_send_type_expr:
+            lines.append(
+                f"  else if ({send_type_expr} == {MSG_SEND_CA} && {sig_send_type_expr} != {cycle_type}"
+                f" && _old != _new && ({inactive_cmp}))"
+            )
+            lines.append("  {")
+            lines.append("    _triggered = 1;")
+            lines.append("    _use_fast = 1;")
+            lines.append("  }")
+
+        lines.append("  if (_triggered)")
+        lines.append("  {")
+        lines.append(f"    {_restore_pending_var(message_name, member)} = 1;")
+        lines.append(f"    {_restore_var(message_name, member)} = _old;")
+        lines.append(f"    {shadow} = _new;")
+        lines.append(f"    begin_burst_{message_name}(_use_fast);")
+        lines.append("  }")
+        lines.append("  else")
+        lines.append(f"    {shadow} = _new;")
+        lines.append("}")
+        lines.append("")
+
     return lines
 
 
@@ -612,10 +961,18 @@ def _build_can_file(
         out.append(f"  msTimer tmr_{name};")
         if _counter_enabled(msg_cfg, model):
             out.append(f"  long cnt_{name};")
+        exclude = set()
+        if msg_cfg.get("has_validation", False):
+            for key in ("check_signal", "counter_signal"):
+                sig = msg_cfg.get(key, "")
+                if sig:
+                    exclude.add(sig)
+        if model.info and model.info.has_msg_send_type:
+            out.extend(_build_burst_variables(name, model, exclude))
     out.append("}")
     out.append("")
 
-    # on start：设置通道、初始化 counter、装载定时器
+    # on start：设置通道、初始化 counter、影子变量、装载定时器
     out.append("on start")
     out.append("{")
     for msg_cfg, model in messages:
@@ -625,21 +982,50 @@ def _build_can_file(
             counter = model.get(msg_cfg.get("counter_signal", ""))
             cmin = _to_capl_number(counter.rv_min, "0")
             out.append(f"  cnt_{name} = {cmin};")
-        out.append(f"  arm_{name}();")
+        exclude = set()
+        if msg_cfg.get("has_validation", False):
+            for key in ("check_signal", "counter_signal"):
+                sig = msg_cfg.get(key, "")
+                if sig:
+                    exclude.add(sig)
+        if model.info and model.info.has_msg_send_type:
+            out.append(f"  burst_left_{name} = 0;")
+            out.append(f"  burst_fast_{name} = 0;")
+            for signal, suffix in _watchable_members(model, exclude):
+                member = f"{signal.name}{suffix}"
+                out.append(f"  {_restore_pending_var(name, member)} = 0;")
+            out.extend(_build_init_shadows(namespace, name, model, exclude))
+        send_type = MSG_SEND_CYCLE
+        if model.info and model.info.has_msg_send_type:
+            out.append(f"  if ({_info_sysvar(namespace, name, '_MsgSendType', parsed, str(MSG_SEND_CYCLE))} != {MSG_SEND_EVENT}"
+                       f" && {_info_sysvar(namespace, name, '_MsgSendType', parsed, str(MSG_SEND_CYCLE))} != {MSG_SEND_IF_ACTIVE})")
+            out.append(f"    arm_{name}();")
+        else:
+            out.append(f"  arm_{name}();")
     out.append("}")
     out.append("")
 
-    # 每条报文：装载函数 + 定时器事件 + 发送函数 + 填充函数
+    # 每条报文：burst / 装载 / 定时器 / 发送 / 填充
     for msg_cfg, model in messages:
         name = model.name
+        exclude = set()
+        if msg_cfg.get("has_validation", False):
+            for key in ("check_signal", "counter_signal"):
+                sig = msg_cfg.get(key, "")
+                if sig:
+                    exclude.add(sig)
+        if model.info and model.info.has_msg_send_type:
+            out.extend(_build_begin_burst_function(namespace, name, parsed))
+            out.extend(_build_finish_burst_function(namespace, name, model, parsed, exclude))
         out.extend(_build_arm_function(namespace, name, parsed))
-        out.extend(_build_timer_handler(name))
+        out.extend(_build_timer_handler(namespace, name, parsed))
         out.extend(_build_send_function(namespace, dbc_name, sender_node, name, parsed))
         out.extend(
             _build_fill_function(
                 namespace,
                 name,
                 model,
+                parsed,
                 bool(msg_cfg.get("has_validation", False)),
                 msg_cfg.get("counter_signal", ""),
                 msg_cfg.get("check_signal", ""),
@@ -647,6 +1033,8 @@ def _build_can_file(
                 msg_cfg.get("check_parameters", {}),
             )
         )
+        if model.info and model.info.has_msg_send_type:
+            out.extend(_build_trigger_handlers(namespace, name, model, parsed, exclude))
 
     # Pv/Rv 联动（跳过 checksum/counter 这类程序自动计算、不接受外部输入的信号）
     for msg_cfg, model in messages:
@@ -661,17 +1049,21 @@ def _build_can_file(
     return "\n".join(out) + "\n"
 
 
-def _build_arm_function(namespace: str, message_name: str, parsed: "ParsedSysvar") -> List[str]:
-    info = _info_var(message_name)
-    if info in parsed.variable_names:
-        cycle_expr = _sysvar(namespace, info, f"{message_name}_MsgCycleTime")
-    else:
-        cycle_expr = "10"  # 无 *_Info 时使用默认周期
+def _build_arm_function(namespace: str, message_name: str, parsed: ParsedSysvar) -> List[str]:
+    cycle_expr = _info_sysvar(namespace, message_name, "_MsgCycleTime", parsed, "10")
+    fast_expr = _info_sysvar(namespace, message_name, "_MsgCycleTimeFast", parsed, cycle_expr)
+    send_type_expr = _info_sysvar(namespace, message_name, "_MsgSendType", parsed, str(MSG_SEND_CYCLE))
     return [
         f"void arm_{message_name}()",
         "{",
         "  long _ct;",
-        f"  _ct = {cycle_expr};",
+        f"  if (({send_type_expr} == {MSG_SEND_EVENT} || {send_type_expr} == {MSG_SEND_IF_ACTIVE})"
+        f" && burst_left_{message_name} <= 0)",
+        "    return;",
+        f"  if (burst_left_{message_name} > 0 && burst_fast_{message_name})",
+        f"    _ct = {fast_expr};",
+        "  else",
+        f"    _ct = {cycle_expr};",
         "  if (_ct <= 0)",
         "    _ct = 10;",
         f"  setTimer(tmr_{message_name}, _ct);",
@@ -680,12 +1072,21 @@ def _build_arm_function(namespace: str, message_name: str, parsed: "ParsedSysvar
     ]
 
 
-def _build_timer_handler(message_name: str) -> List[str]:
+def _build_timer_handler(namespace: str, message_name: str, parsed: ParsedSysvar) -> List[str]:
     return [
         f"on timer tmr_{message_name}",
         "{",
         f"  send_{message_name}();",
-        f"  arm_{message_name}();",
+        f"  if (burst_left_{message_name} > 0)",
+        "  {",
+        f"    burst_left_{message_name}--;",
+        f"    if (burst_left_{message_name} <= 0)",
+        f"      finish_burst_{message_name}();",
+        "    else",
+        f"      arm_{message_name}();",
+        "  }",
+        "  else",
+        f"    arm_{message_name}();",
         "}",
         "",
     ]
@@ -712,8 +1113,11 @@ def _build_send_function(
     if info in parsed.variable_names:
         lines.append(f"  if ({_sysvar(namespace, info, message_name + '_MsgOn')} != 1) return;")
         lines.append(f"  if ({_sysvar(namespace, info, message_name + '_MsgOff')} == 1) return;")
-        # 仅 Cycle 类型（MsgSendType == 0）
-        lines.append(f"  if ({_sysvar(namespace, info, message_name + '_MsgSendType')} != 0) return;")
+        send_type_expr = _info_sysvar(namespace, message_name, "_MsgSendType", parsed, str(MSG_SEND_CYCLE))
+        lines.append(
+            f"  if (({send_type_expr} == {MSG_SEND_EVENT} || {send_type_expr} == {MSG_SEND_IF_ACTIVE})"
+            f" && burst_left_{message_name} <= 0) return;"
+        )
     lines.append(f"  fill_{message_name}();")
     lines.append(f"  output({_msg_var(message_name)});")
     lines.append("}")
