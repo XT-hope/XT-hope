@@ -125,7 +125,7 @@ def _parse_value_table(member: ET.Element) -> Dict[int, str]:
         return table
     for entry in vt.findall("valuetableentry"):
         value_text = entry.get("value", "")
-        desc = entry.get("description", "") or entry.get("name", "") or ""
+        desc = entry.get("description", "") or entry.get("displayString", "") or entry.get("name", "") or ""
         try:
             if value_text.strip().lower().startswith("0x"):
                 key = int(value_text.strip(), 16)
@@ -148,11 +148,18 @@ def _choice_value_by_name(choices: Dict[int, str], *names: str) -> Optional[int]
 
 
 def _resolve_sig_send_types(choices: Dict[int, str]) -> Tuple[int, int, int]:
-    """解析 SigSendType valuetable，返回 (cycle, on_change, on_write) 的数值。"""
+    """解析 SigSendType valuetable，返回 (cycle, on_change, on_write) 的数值。
+
+    若 valuetable 缺失，默认与常见 DBC 定义一致：Cycle=0, OnWrite=1, OnChange=2。
+    """
     cycle = _choice_value_by_name(choices, "Cycle", "Cyclic", "cycle", "cyclic")
     on_change = _choice_value_by_name(choices, "OnChange", "onchange")
     on_write = _choice_value_by_name(choices, "OnWrite", "onwrite")
-    return cycle if cycle is not None else 0, on_change if on_change is not None else 1, on_write if on_write is not None else 2
+    return (
+        cycle if cycle is not None else 0,
+        on_change if on_change is not None else 2,
+        on_write if on_write is not None else 1,
+    )
 
 
 def _build_message_info_model(message_name: str, members: List[ET.Element]) -> MessageInfoModel:
@@ -779,7 +786,7 @@ def _build_trigger_handlers(
         capl_type = _capl_member_type(signal, suffix)
 
         sig_send_type_expr = None
-        cycle_type, on_change_type, on_write_type = 0, 1, 2
+        cycle_type, on_change_type, on_write_type = 0, 2, 1
         if signal.has_sig_send_type:
             sig_send_type_expr = _sysvar(namespace, message_name, f"{signal.name}_SigSendType")
             cycle_type, on_change_type, on_write_type = _resolve_sig_send_types(signal.sig_send_type_choices)

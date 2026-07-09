@@ -1,0 +1,50 @@
+<?xml version='1.0' encoding='utf-8'?>
+<systemvariables version="4">
+  <namespace name="" comment="" interface="">
+    <namespace name="Control" comment="" interface="">
+      <struct name="control_node_info" isUnion="False" definedBinaryLayout="False" comment="">
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_MsgOn" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="1" minValue="0" maxValue="1" />
+      </struct>
+      <variable anlyzLocal="2" readOnly="false" valueSequence="false" unit="" name="Control_Node_Info" comment="" bitcount="32" isSigned="true" encoding="65001" type="struct" structDefinition="Control::control_node_info" />
+      <struct name="ipb_0x10c_info" isUnion="False" definedBinaryLayout="False" comment="">
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_0x10C_MsgOn" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="1" minValue="0" maxValue="1" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_0x10C_MsgOff" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_0x10C_MsgSendType" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="5">
+          <valuetable name="IPB_0x10C_MsgSendTypeVt" definesMinMax="false">
+            <valuetableentry value="0" lowerBound="0" upperBound="0" description="Cycle" displayString="Cycle" />
+            <valuetableentry value="1" lowerBound="1" upperBound="1" description="Event" displayString="Event" />
+            <valuetableentry value="2" lowerBound="2" upperBound="2" description="IfActive" displayString="IfActive" />
+            <valuetableentry value="3" lowerBound="3" upperBound="3" description="CE" displayString="CE" />
+            <valuetableentry value="4" lowerBound="4" upperBound="4" description="CA" displayString="CA" />
+            <valuetableentry value="5" lowerBound="5" upperBound="5" description="NoMsgSendType" displayString="NoMsgSendType" />
+          </valuetable>
+        </structMember>
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_0x10C_MsgCycleTime" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="10" minValue="0" maxValue="65535" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_0x10C_WrongCRCFlag" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="IPB_0x10C_WrongCounterFlag" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
+      </struct>
+      <variable anlyzLocal="2" readOnly="false" valueSequence="false" unit="" name="IPB_0x10C_Info" comment="" bitcount="192" isSigned="true" encoding="65001" type="struct" structDefinition="Control::ipb_0x10c_info" />
+      <struct name="ipb_0x10c" isUnion="False" definedBinaryLayout="False" comment="">
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_Pv" comment="Vehicle_speed" bitcount="64" isSigned="false" encoding="65001" type="float" startValue="0" minValue="0" maxValue="281.4625" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_Rv" comment="Vehicle_speed" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="4094" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_Factor" comment="Vehicle_speed" bitcount="64" isSigned="false" encoding="65001" type="float" startValue="0.06875" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_Offset" comment="Vehicle_speed" bitcount="64" isSigned="false" encoding="65001" type="float" startValue="0" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_has_special_value" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_use_special_value" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_has_inactive_value" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="1" minValue="0" maxValue="1" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_use_inactive_value" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="1" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_inactive_value" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="4095" />
+        <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_SigSendType" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="4">
+          <valuetable name="Vehicle_speed_SigSendTypeVt" definesMinMax="false">
+            <valuetableentry value="0" lowerBound="0" upperBound="0" description="Cycle" displayString="Cycle" />
+            <valuetableentry value="1" lowerBound="1" upperBound="1" description="OnWrite" displayString="OnWrite" />
+            <valuetableentry value="2" lowerBound="2" upperBound="2" description="OnChange" displayString="OnChange" />
+            <valuetableentry value="3" lowerBound="3" upperBound="3" description="Event" displayString="Event" />
+            <valuetableentry value="4" lowerBound="4" upperBound="4" description="NoSigSendType" displayString="NoSigSendType" />
+          </valuetable>
+        </structMember>
+      </struct>
+      <variable anlyzLocal="2" readOnly="false" valueSequence="false" unit="" name="IPB_0x10C" comment="" bitcount="512" isSigned="true" encoding="65001" type="struct" structDefinition="Control::ipb_0x10c" />
+    </namespace>
+  </namespace>
+</systemvariables>

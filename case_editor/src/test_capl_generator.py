@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from capl_generator import generate_capl, parse_vsysvar, load_channel_mapping
+from capl_generator import generate_capl, parse_vsysvar, load_channel_mapping, _resolve_sig_send_types
 
 
 VSYSVAR = """<?xml version='1.0' encoding='utf-8'?>
@@ -52,8 +52,8 @@ VSYSVAR = """<?xml version='1.0' encoding='utf-8'?>
         <structMember relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" name="Vehicle_speed_SigSendType" comment="" bitcount="32" isSigned="false" encoding="65001" type="int" startValue="0" minValue="0" maxValue="2">
           <valuetable defineMinMax="false" defineStartValue="false">
             <valuetableentry value="0" description="Cycle" />
-            <valuetableentry value="1" description="OnChange" />
-            <valuetableentry value="2" description="OnWrite" />
+            <valuetableentry value="1" description="OnWrite" />
+            <valuetableentry value="2" description="OnChange" />
           </valuetable>
         </structMember>
       </struct>
@@ -70,6 +70,20 @@ VSYSVAR = """<?xml version='1.0' encoding='utf-8'?>
   </namespace>
 </systemvariables>
 """
+
+
+def test_control_sample_vsysvar():
+    """用用户提供的 Control 网络样例验证解析与 SigSendType 映射。"""
+    fixture = Path(__file__).parent / "fixtures" / "control_ipb_sample.vsysvar"
+    parsed = parse_vsysvar(str(fixture))
+    model = parsed.messages["IPB_0x10C"]
+    signal = model.get("Vehicle_speed")
+    assert model.info.has_wrong_crc_flag
+    assert model.info.has_wrong_counter_flag
+    assert signal.has_sig_send_type
+    assert signal.sig_send_type_choices[1] == "OnWrite"
+    assert signal.sig_send_type_choices[2] == "OnChange"
+    assert _resolve_sig_send_types(signal.sig_send_type_choices) == (0, 2, 1)
 
 
 def main():
@@ -158,4 +172,6 @@ def main():
 
 
 if __name__ == "__main__":
+    test_control_sample_vsysvar()
+    print("=== test_control_sample_vsysvar passed ===")
     main()
