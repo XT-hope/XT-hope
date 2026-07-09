@@ -172,6 +172,8 @@ def main():
     assert "WrongCRCFlag" in capl_text
     assert "WrongCounterFlag" in capl_text
     assert "MsgNrOfRepetition" in capl_text
+    assert capl_text.count("on sysvar control::IPB_0x10C.Vehicle_speed_Pv") == 1
+    assert capl_text.count("on sysvar control::IPB_0x10C.Vehicle_speed_Rv") == 1
     print("\n=== assertions passed ===")
 
 

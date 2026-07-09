@@ -772,181 +772,225 @@ def _build_finish_burst_function(
     return lines
 
 
-def _build_trigger_handlers(
+def _linkage_factor_ok(signal: SignalModel) -> bool:
+    try:
+        return float(signal.factor) != 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _has_burst_triggers(model: MessageModel) -> bool:
+    return model.info is not None and model.info.has_msg_send_type
+
+
+def _append_burst_trigger_lines(
+    lines: List[str],
     namespace: str,
     message_name: str,
     model: MessageModel,
     parsed: ParsedSysvar,
-    exclude: Optional[set] = None,
-) -> List[str]:
-    """为 Event / CE / IfActive / CA 生成 on sysvar 触发处理器。"""
-    exclude = exclude or set()
+    signal: SignalModel,
+    suffix: str,
+    member: str,
+) -> None:
+    """向 handler 函数体追加 burst 触发逻辑（不含 on sysvar 包装）。"""
     info = model.info
     if info is None or not info.has_msg_send_type:
-        return []
+        return
 
     send_type_expr = _info_sysvar(namespace, message_name, "_MsgSendType", parsed, str(MSG_SEND_CYCLE))
-    lines: List[str] = []
+    shadow = _shadow_var(message_name, member)
+    sv = _sysvar(namespace, message_name, member)
+    capl_type = _capl_member_type(signal, suffix)
+    sig_table = signal.sig_send_type if signal.has_sig_send_type else None
+    sig_send_type_expr = (
+        _sysvar(namespace, message_name, f"{signal.name}_SigSendType") if sig_table else None
+    )
 
-    for signal, suffix in _watchable_members(model, exclude):
-        member = f"{signal.name}{suffix}"
-        sv_path = f"{namespace}::{message_name}.{member}"
-        sv = _sysvar(namespace, message_name, member)
-        shadow = _shadow_var(message_name, member)
-        capl_type = _capl_member_type(signal, suffix)
-        sig_table = signal.sig_send_type if signal.has_sig_send_type else None
-        sig_send_type_expr = (
-            _sysvar(namespace, message_name, f"{signal.name}_SigSendType") if sig_table else None
+    inactive_cmp = None
+    if signal.has_inactive_value and suffix in ("_Pv", "_Rv"):
+        if suffix == "_Pv":
+            inactive_cmp = f"_new != ({_inactive_phys_expr(namespace, message_name, signal)})"
+        else:
+            inactive_cmp = f"_new != ({_inactive_raw_expr(namespace, message_name, signal)})"
+
+    lines.append(f"  {capl_type} _old, _new;")
+    lines.append("  long _triggered, _use_fast;")
+    lines.append(f"  _old = {shadow};")
+    lines.append(f"  _new = {sv};")
+    lines.append("  _triggered = 0;")
+    lines.append("  _use_fast = 0;")
+
+    lines.append(f"  if ({send_type_expr} == {MSG_SEND_EVENT} && _old != _new)")
+    lines.append("  {")
+    lines.append("    _triggered = 1;")
+    lines.append("    _use_fast = 0;")
+    lines.append("  }")
+
+    if inactive_cmp:
+        lines.append(
+            f"  else if ({send_type_expr} == {MSG_SEND_IF_ACTIVE} && _old != _new && ({inactive_cmp}))"
         )
-
-        inactive_cmp = None
-        if signal.has_inactive_value and suffix in ("_Pv", "_Rv"):
-            if suffix == "_Pv":
-                inactive_cmp = f"_new != ({_inactive_phys_expr(namespace, message_name, signal)})"
-            else:
-                inactive_cmp = f"_new != ({_inactive_raw_expr(namespace, message_name, signal)})"
-
-        lines.append(f"on sysvar {sv_path}")
-        lines.append("{")
-        lines.append(f"  {capl_type} _old, _new;")
-        lines.append("  long _triggered, _use_fast;")
-        lines.append(f"  _old = {shadow};")
-        lines.append(f"  _new = {sv};")
-        lines.append("  _triggered = 0;")
-        lines.append("  _use_fast = 0;")
-
-        # Event
-        lines.append(f"  if ({send_type_expr} == {MSG_SEND_EVENT} && _old != _new)")
         lines.append("  {")
         lines.append("    _triggered = 1;")
         lines.append("    _use_fast = 0;")
         lines.append("  }")
 
-        # IfActive
-        if inactive_cmp:
+    if sig_send_type_expr and sig_table:
+        if sig_table.on_change is not None:
             lines.append(
-                f"  else if ({send_type_expr} == {MSG_SEND_IF_ACTIVE} && _old != _new && ({inactive_cmp}))"
+                f"  else if ({send_type_expr} == {MSG_SEND_CE} && {sig_send_type_expr} == {sig_table.on_change}"
+                f" && _old != _new)"
             )
             lines.append("  {")
             lines.append("    _triggered = 1;")
-            lines.append("    _use_fast = 0;")
+            lines.append("    _use_fast = 1;")
             lines.append("  }")
-
-        # CE：仅当 valuetable 中解析到 OnChange / OnWrite 数值时才生成对应分支
-        if sig_send_type_expr and sig_table:
-            if sig_table.on_change is not None:
-                lines.append(
-                    f"  else if ({send_type_expr} == {MSG_SEND_CE} && {sig_send_type_expr} == {sig_table.on_change}"
-                    f" && _old != _new)"
-                )
-                lines.append("  {")
-                lines.append("    _triggered = 1;")
-                lines.append("    _use_fast = 1;")
-                lines.append("  }")
-            if sig_table.on_write is not None:
-                lines.append(
-                    f"  else if ({send_type_expr} == {MSG_SEND_CE} && {sig_send_type_expr} == {sig_table.on_write})"
-                )
-                lines.append("  {")
-                lines.append("    _triggered = 1;")
-                lines.append("    _use_fast = 1;")
-                lines.append("  }")
-
-        # CA：非 Cycle 类型信号变为非 inactive 时快速 burst
-        if inactive_cmp and sig_send_type_expr and sig_table and sig_table.cycle is not None:
+        if sig_table.on_write is not None:
             lines.append(
-                f"  else if ({send_type_expr} == {MSG_SEND_CA} && {sig_send_type_expr} != {sig_table.cycle}"
-                f" && _old != _new && ({inactive_cmp}))"
+                f"  else if ({send_type_expr} == {MSG_SEND_CE} && {sig_send_type_expr} == {sig_table.on_write})"
             )
             lines.append("  {")
             lines.append("    _triggered = 1;")
             lines.append("    _use_fast = 1;")
             lines.append("  }")
 
-        lines.append("  if (_triggered)")
+    if inactive_cmp and sig_send_type_expr and sig_table and sig_table.cycle is not None:
+        lines.append(
+            f"  else if ({send_type_expr} == {MSG_SEND_CA} && {sig_send_type_expr} != {sig_table.cycle}"
+            f" && _old != _new && ({inactive_cmp}))"
+        )
         lines.append("  {")
-        lines.append(f"    {_restore_pending_var(message_name, member)} = 1;")
-        lines.append(f"    {_restore_var(message_name, member)} = _old;")
-        lines.append(f"    {shadow} = _new;")
-        lines.append(f"    begin_burst_{message_name}(_use_fast);")
+        lines.append("    _triggered = 1;")
+        lines.append("    _use_fast = 1;")
         lines.append("  }")
-        lines.append("  else")
-        lines.append(f"    {shadow} = _new;")
-        lines.append("}")
-        lines.append("")
 
-    return lines
+    lines.append("  if (_triggered)")
+    lines.append("  {")
+    lines.append(f"    {_restore_pending_var(message_name, member)} = 1;")
+    lines.append(f"    {_restore_var(message_name, member)} = _old;")
+    lines.append(f"    {shadow} = _new;")
+    lines.append(f"    begin_burst_{message_name}(_use_fast);")
+    lines.append("  }")
+    lines.append("  else")
+    lines.append(f"    {shadow} = _new;")
 
 
-def _build_linkage_handlers(
+def _append_pv_to_rv_linkage_lines(
+    lines: List[str],
+    namespace: str,
+    message_name: str,
+    signal: SignalModel,
+) -> None:
+    """Pv 变化时同步 Rv。"""
+    pv = _sysvar(namespace, message_name, f"{signal.name}_Pv")
+    rv = _sysvar(namespace, message_name, f"{signal.name}_Rv")
+    factor_lit = _format_float(signal.factor, "1")
+    offset_lit = _format_float(signal.offset, "0")
+    lines.append("  double _q;")
+    lines.append("  long _newRv;")
+    lines.append(f"  _q = ({pv} - ({offset_lit})) / ({factor_lit});")
+    lines.append("  if (_q >= 0)")
+    lines.append("    _newRv = (long)(_q + 0.5);")
+    lines.append("  else")
+    lines.append("    _newRv = (long)(_q - 0.5);")
+    if signal.rv_min is not None and signal.rv_min != "":
+        lines.append(f"  if (_newRv < {signal.rv_min})")
+        lines.append(f"    _newRv = {signal.rv_min};")
+    if signal.rv_max is not None and signal.rv_max != "":
+        lines.append(f"  if (_newRv > {signal.rv_max})")
+        lines.append(f"    _newRv = {signal.rv_max};")
+    lines.append(f"  if (_newRv != {rv})")
+    lines.append(f"    {rv} = _newRv;")
+
+
+def _append_rv_to_pv_linkage_lines(
+    lines: List[str],
+    namespace: str,
+    message_name: str,
+    signal: SignalModel,
+) -> None:
+    """Rv 变化时同步 Pv。"""
+    pv = _sysvar(namespace, message_name, f"{signal.name}_Pv")
+    rv = _sysvar(namespace, message_name, f"{signal.name}_Rv")
+    factor_lit = _format_float(signal.factor, "1")
+    offset_lit = _format_float(signal.offset, "0")
+    lines.append("  double _newPv;")
+    lines.append(f"  _newPv = {rv} * ({factor_lit}) + ({offset_lit});")
+    lines.append(f"  if (_newPv != {pv})")
+    lines.append(f"    {pv} = _newPv;")
+
+
+def _build_merged_sysvar_handlers(
     namespace: str,
     message_name: str,
     model: MessageModel,
+    parsed: ParsedSysvar,
     exclude: Optional[set] = None,
 ) -> List[str]:
-    """为每个同时具备 Pv/Rv 的信号生成双向联动 on sysvar 处理器。
+    """为每个系统变量成员生成唯一的 on sysvar 处理器（burst 触发 + Pv/Rv 联动合并）。
 
-    换算的 Factor/Offset 直接采用系统变量文件里的常量（生成时确定），不在运行时再读取
-    _Factor/_Offset 系统变量。exclude 中的信号（如 checksum/counter，由程序自动计算、
-    不接受外部输入）不生成联动。
+    CAPL 不允许对同一 sysvar 注册多个 on sysvar，因此每个成员最多一个 handler。
     """
     exclude = exclude or set()
+    has_burst = _has_burst_triggers(model)
+    watchable = {(s.name, suf) for s, suf in _watchable_members(model, exclude)}
     lines: List[str] = []
+
     for signal in model.signals:
         if signal.name in exclude:
             continue
-        if not (signal.has_pv and signal.has_rv):
-            continue
-        try:
-            factor = float(signal.factor)
-        except (TypeError, ValueError):
-            factor = 1.0
-        try:
-            offset = float(signal.offset)
-        except (TypeError, ValueError):
-            offset = 0.0
-        # Factor 为 0 无法换算，跳过该信号的联动。
-        if factor == 0:
-            continue
 
-        pv = _sysvar(namespace, message_name, f"{signal.name}_Pv")
-        rv = _sysvar(namespace, message_name, f"{signal.name}_Rv")
-        factor_lit = _format_float(signal.factor, "1")
-        offset_lit = _format_float(signal.offset, "0")
-        sv_pv = f"{namespace}::{message_name}.{signal.name}_Pv"
-        sv_rv = f"{namespace}::{message_name}.{signal.name}_Rv"
+        linkage_ok = signal.has_pv and signal.has_rv and _linkage_factor_ok(signal)
 
-        # Pv 改变 -> 重算 Rv（Rv = 四舍五入((Pv - Offset)/Factor)），并夹到 Rv 的 min/max。
-        # CAPL 无 round()，用 (long)(x +/- 0.5) 实现四舍五入（兼容负值）。
-        lines.append(f"on sysvar {sv_pv}")
-        lines.append("{")
-        lines.append("  double _q;")
-        lines.append("  long _newRv;")
-        lines.append(f"  _q = ({pv} - ({offset_lit})) / ({factor_lit});")
-        lines.append("  if (_q >= 0)")
-        lines.append("    _newRv = (long)(_q + 0.5);")
-        lines.append("  else")
-        lines.append("    _newRv = (long)(_q - 0.5);")
-        if signal.rv_min is not None and signal.rv_min != "":
-            lines.append(f"  if (_newRv < {signal.rv_min})")
-            lines.append(f"    _newRv = {signal.rv_min};")
-        if signal.rv_max is not None and signal.rv_max != "":
-            lines.append(f"  if (_newRv > {signal.rv_max})")
-            lines.append(f"    _newRv = {signal.rv_max};")
-        lines.append(f"  if (_newRv != {rv})")
-        lines.append(f"    {rv} = _newRv;")
-        lines.append("}")
-        lines.append("")
+        if signal.has_pv:
+            member = f"{signal.name}_Pv"
+            sv_path = f"{namespace}::{message_name}.{member}"
+            body: List[str] = []
+            if has_burst and (signal.name, "_Pv") in watchable:
+                _append_burst_trigger_lines(
+                    body, namespace, message_name, model, parsed, signal, "_Pv", member
+                )
+            if linkage_ok:
+                _append_pv_to_rv_linkage_lines(body, namespace, message_name, signal)
+            if body:
+                lines.append(f"on sysvar {sv_path}")
+                lines.append("{")
+                lines.extend(body)
+                lines.append("}")
+                lines.append("")
 
-        # Rv 改变 -> 重算 Pv（Pv = Rv*Factor + Offset）
-        lines.append(f"on sysvar {sv_rv}")
-        lines.append("{")
-        lines.append("  double _newPv;")
-        lines.append(f"  _newPv = {rv} * ({factor_lit}) + ({offset_lit});")
-        lines.append(f"  if (_newPv != {pv})")
-        lines.append(f"    {pv} = _newPv;")
-        lines.append("}")
-        lines.append("")
+        if signal.has_rv:
+            member = f"{signal.name}_Rv"
+            sv_path = f"{namespace}::{message_name}.{member}"
+            body = []
+            if has_burst and (signal.name, "_Rv") in watchable:
+                _append_burst_trigger_lines(
+                    body, namespace, message_name, model, parsed, signal, "_Rv", member
+                )
+            if linkage_ok:
+                _append_rv_to_pv_linkage_lines(body, namespace, message_name, signal)
+            if body:
+                lines.append(f"on sysvar {sv_path}")
+                lines.append("{")
+                lines.extend(body)
+                lines.append("}")
+                lines.append("")
+
+        if has_burst and signal.has_special_value and (signal.name, "_use_special_value") in watchable:
+            member = f"{signal.name}_use_special_value"
+            sv_path = f"{namespace}::{message_name}.{member}"
+            body = []
+            _append_burst_trigger_lines(
+                body, namespace, message_name, model, parsed, signal, "_use_special_value", member
+            )
+            if body:
+                lines.append(f"on sysvar {sv_path}")
+                lines.append("{")
+                lines.extend(body)
+                lines.append("}")
+                lines.append("")
+
     return lines
 
 
@@ -1050,18 +1094,7 @@ def _build_can_file(
                 msg_cfg.get("check_parameters", {}),
             )
         )
-        if model.info and model.info.has_msg_send_type:
-            out.extend(_build_trigger_handlers(namespace, name, model, parsed, exclude))
-
-    # Pv/Rv 联动（跳过 checksum/counter 这类程序自动计算、不接受外部输入的信号）
-    for msg_cfg, model in messages:
-        exclude = set()
-        if msg_cfg.get("has_validation", False):
-            for key in ("check_signal", "counter_signal"):
-                sig = msg_cfg.get(key, "")
-                if sig:
-                    exclude.add(sig)
-        out.extend(_build_linkage_handlers(namespace, model.name, model, exclude))
+        out.extend(_build_merged_sysvar_handlers(namespace, name, model, parsed, exclude))
 
     return "\n".join(out) + "\n"
 
