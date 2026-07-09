@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from capl_generator import generate_capl, parse_vsysvar, load_channel_mapping, _resolve_sig_send_types
+from capl_generator import generate_capl, parse_vsysvar, load_channel_mapping
 
 
 VSYSVAR = """<?xml version='1.0' encoding='utf-8'?>
@@ -81,9 +81,13 @@ def test_control_sample_vsysvar():
     assert model.info.has_wrong_crc_flag
     assert model.info.has_wrong_counter_flag
     assert signal.has_sig_send_type
-    assert signal.sig_send_type_choices[1] == "OnWrite"
-    assert signal.sig_send_type_choices[2] == "OnChange"
-    assert _resolve_sig_send_types(signal.sig_send_type_choices) == (0, 2, 1)
+    table = signal.sig_send_type
+    assert table.choices[1] == "OnWrite"
+    assert table.choices[2] == "OnChange"
+    assert table.cycle == 0
+    assert table.on_write == 1
+    assert table.on_change == 2
+    assert table.event == 3
 
 
 def main():

@@ -55,6 +55,20 @@ _WATCHABLE_SUFFIXES = ("_Pv", "_Rv", "_use_special_value")
 
 
 @dataclass
+class SigSendTypeTable:
+    """从 .vsysvar 解析得到的 SigSendType valuetable 及其语义映射。
+
+    数值完全来自 valuetable，生成 CAPL 时只使用此处记录的值，不写死默认映射。
+    若 valuetable 中缺少某项，对应字段为 None，生成器跳过依赖该类型的触发分支。
+    """
+    choices: Dict[int, str] = field(default_factory=dict)
+    cycle: Optional[int] = None
+    on_write: Optional[int] = None
+    on_change: Optional[int] = None
+    event: Optional[int] = None
+
+
+@dataclass
 class SignalModel:
     """报文中的单个信号及其系统变量元数据。"""
     name: str
@@ -69,7 +83,7 @@ class SignalModel:
     has_pv: bool = False
     has_rv: bool = False
     has_sig_send_type: bool = False
-    sig_send_type_choices: Dict[int, str] = field(default_factory=dict)
+    sig_send_type: SigSendTypeTable = field(default_factory=SigSendTypeTable)
 
 
 @dataclass
@@ -147,18 +161,14 @@ def _choice_value_by_name(choices: Dict[int, str], *names: str) -> Optional[int]
     return None
 
 
-def _resolve_sig_send_types(choices: Dict[int, str]) -> Tuple[int, int, int]:
-    """解析 SigSendType valuetable，返回 (cycle, on_change, on_write) 的数值。
-
-    若 valuetable 缺失，默认与常见 DBC 定义一致：Cycle=0, OnWrite=1, OnChange=2。
-    """
-    cycle = _choice_value_by_name(choices, "Cycle", "Cyclic", "cycle", "cyclic")
-    on_change = _choice_value_by_name(choices, "OnChange", "onchange")
-    on_write = _choice_value_by_name(choices, "OnWrite", "onwrite")
-    return (
-        cycle if cycle is not None else 0,
-        on_change if on_change is not None else 2,
-        on_write if on_write is not None else 1,
+def _build_sig_send_type_table(choices: Dict[int, str]) -> SigSendTypeTable:
+    """根据 valuetable 建立 SigSendType 语义到数值的映射（解析阶段一次性完成）。"""
+    return SigSendTypeTable(
+        choices=dict(choices),
+        cycle=_choice_value_by_name(choices, "Cycle", "Cyclic", "cycle", "cyclic"),
+        on_write=_choice_value_by_name(choices, "OnWrite", "onwrite"),
+        on_change=_choice_value_by_name(choices, "OnChange", "onchange"),
+        event=_choice_value_by_name(choices, "Event", "event"),
     )
 
 
@@ -295,7 +305,7 @@ def _apply_member(signal: SignalModel, suffix: str, member: ET.Element) -> None:
         signal.inactive_raw = member.get("startValue")
     elif suffix == "_SigSendType":
         signal.has_sig_send_type = True
-        signal.sig_send_type_choices = _parse_value_table(member)
+        signal.sig_send_type = _build_sig_send_type_table(_parse_value_table(member))
 
 
 def _read_text_any_encoding(path: str) -> str:
@@ -784,12 +794,10 @@ def _build_trigger_handlers(
         sv = _sysvar(namespace, message_name, member)
         shadow = _shadow_var(message_name, member)
         capl_type = _capl_member_type(signal, suffix)
-
-        sig_send_type_expr = None
-        cycle_type, on_change_type, on_write_type = 0, 2, 1
-        if signal.has_sig_send_type:
-            sig_send_type_expr = _sysvar(namespace, message_name, f"{signal.name}_SigSendType")
-            cycle_type, on_change_type, on_write_type = _resolve_sig_send_types(signal.sig_send_type_choices)
+        sig_table = signal.sig_send_type if signal.has_sig_send_type else None
+        sig_send_type_expr = (
+            _sysvar(namespace, message_name, f"{signal.name}_SigSendType") if sig_table else None
+        )
 
         inactive_cmp = None
         if signal.has_inactive_value and suffix in ("_Pv", "_Rv"):
@@ -824,28 +832,30 @@ def _build_trigger_handlers(
             lines.append("    _use_fast = 0;")
             lines.append("  }")
 
-        # CE
-        if sig_send_type_expr:
-            lines.append(
-                f"  else if ({send_type_expr} == {MSG_SEND_CE} && {sig_send_type_expr} == {on_change_type}"
-                f" && _old != _new)"
-            )
-            lines.append("  {")
-            lines.append("    _triggered = 1;")
-            lines.append("    _use_fast = 1;")
-            lines.append("  }")
-            lines.append(
-                f"  else if ({send_type_expr} == {MSG_SEND_CE} && {sig_send_type_expr} == {on_write_type})"
-            )
-            lines.append("  {")
-            lines.append("    _triggered = 1;")
-            lines.append("    _use_fast = 1;")
-            lines.append("  }")
+        # CE：仅当 valuetable 中解析到 OnChange / OnWrite 数值时才生成对应分支
+        if sig_send_type_expr and sig_table:
+            if sig_table.on_change is not None:
+                lines.append(
+                    f"  else if ({send_type_expr} == {MSG_SEND_CE} && {sig_send_type_expr} == {sig_table.on_change}"
+                    f" && _old != _new)"
+                )
+                lines.append("  {")
+                lines.append("    _triggered = 1;")
+                lines.append("    _use_fast = 1;")
+                lines.append("  }")
+            if sig_table.on_write is not None:
+                lines.append(
+                    f"  else if ({send_type_expr} == {MSG_SEND_CE} && {sig_send_type_expr} == {sig_table.on_write})"
+                )
+                lines.append("  {")
+                lines.append("    _triggered = 1;")
+                lines.append("    _use_fast = 1;")
+                lines.append("  }")
 
-        # CA
-        if inactive_cmp and sig_send_type_expr:
+        # CA：非 Cycle 类型信号变为非 inactive 时快速 burst
+        if inactive_cmp and sig_send_type_expr and sig_table and sig_table.cycle is not None:
             lines.append(
-                f"  else if ({send_type_expr} == {MSG_SEND_CA} && {sig_send_type_expr} != {cycle_type}"
+                f"  else if ({send_type_expr} == {MSG_SEND_CA} && {sig_send_type_expr} != {sig_table.cycle}"
                 f" && _old != _new && ({inactive_cmp}))"
             )
             lines.append("  {")
