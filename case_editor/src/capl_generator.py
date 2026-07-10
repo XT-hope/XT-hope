@@ -783,6 +783,16 @@ def _has_burst_triggers(model: MessageModel) -> bool:
     return model.info is not None and model.info.has_msg_send_type
 
 
+def _append_burst_trigger_decls(
+    lines: List[str],
+    signal: SignalModel,
+    suffix: str,
+) -> None:
+    capl_type = _capl_member_type(signal, suffix)
+    lines.append(f"  {capl_type} _old, _new;")
+    lines.append("  long _triggered, _use_fast;")
+
+
 def _append_burst_trigger_lines(
     lines: List[str],
     namespace: str,
@@ -792,16 +802,15 @@ def _append_burst_trigger_lines(
     signal: SignalModel,
     suffix: str,
     member: str,
-) -> None:
-    """向 handler 函数体追加 burst 触发逻辑（不含 on sysvar 包装）。"""
+) -> bool:
+    """向 handler 追加 burst 触发语句（不含局部变量声明）。返回是否生成了 burst 逻辑。"""
     info = model.info
     if info is None or not info.has_msg_send_type:
-        return
+        return False
 
     send_type_expr = _info_sysvar(namespace, message_name, "_MsgSendType", parsed, str(MSG_SEND_CYCLE))
     shadow = _shadow_var(message_name, member)
     sv = _sysvar(namespace, message_name, member)
-    capl_type = _capl_member_type(signal, suffix)
     sig_table = signal.sig_send_type if signal.has_sig_send_type else None
     sig_send_type_expr = (
         _sysvar(namespace, message_name, f"{signal.name}_SigSendType") if sig_table else None
@@ -814,8 +823,6 @@ def _append_burst_trigger_lines(
         else:
             inactive_cmp = f"_new != ({_inactive_raw_expr(namespace, message_name, signal)})"
 
-    lines.append(f"  {capl_type} _old, _new;")
-    lines.append("  long _triggered, _use_fast;")
     lines.append(f"  _old = {shadow};")
     lines.append(f"  _new = {sv};")
     lines.append("  _triggered = 0;")
@@ -874,6 +881,12 @@ def _append_burst_trigger_lines(
     lines.append("  }")
     lines.append("  else")
     lines.append(f"    {shadow} = _new;")
+    return True
+
+
+def _append_pv_to_rv_linkage_decls(lines: List[str]) -> None:
+    lines.append("  double _q;")
+    lines.append("  long _newRv;")
 
 
 def _append_pv_to_rv_linkage_lines(
@@ -887,8 +900,6 @@ def _append_pv_to_rv_linkage_lines(
     rv = _sysvar(namespace, message_name, f"{signal.name}_Rv")
     factor_lit = _format_float(signal.factor, "1")
     offset_lit = _format_float(signal.offset, "0")
-    lines.append("  double _q;")
-    lines.append("  long _newRv;")
     lines.append(f"  _q = ({pv} - ({offset_lit})) / ({factor_lit});")
     lines.append("  if (_q >= 0)")
     lines.append("    _newRv = (long)(_q + 0.5);")
@@ -904,6 +915,10 @@ def _append_pv_to_rv_linkage_lines(
     lines.append(f"    {rv} = _newRv;")
 
 
+def _append_rv_to_pv_linkage_decls(lines: List[str]) -> None:
+    lines.append("  double _newPv;")
+
+
 def _append_rv_to_pv_linkage_lines(
     lines: List[str],
     namespace: str,
@@ -915,7 +930,6 @@ def _append_rv_to_pv_linkage_lines(
     rv = _sysvar(namespace, message_name, f"{signal.name}_Rv")
     factor_lit = _format_float(signal.factor, "1")
     offset_lit = _format_float(signal.offset, "0")
-    lines.append("  double _newPv;")
     lines.append(f"  _newPv = {rv} * ({factor_lit}) + ({offset_lit});")
     lines.append(f"  if (_newPv != {pv})")
     lines.append(f"    {pv} = _newPv;")
@@ -946,48 +960,64 @@ def _build_merged_sysvar_handlers(
         if signal.has_pv:
             member = f"{signal.name}_Pv"
             sv_path = f"{namespace}::{message_name}.{member}"
-            body: List[str] = []
-            if has_burst and (signal.name, "_Pv") in watchable:
+            decls: List[str] = []
+            stmts: List[str] = []
+            want_burst = has_burst and (signal.name, "_Pv") in watchable
+            if want_burst:
+                _append_burst_trigger_decls(decls, signal, "_Pv")
+            if linkage_ok:
+                _append_pv_to_rv_linkage_decls(decls)
+            if want_burst:
                 _append_burst_trigger_lines(
-                    body, namespace, message_name, model, parsed, signal, "_Pv", member
+                    stmts, namespace, message_name, model, parsed, signal, "_Pv", member
                 )
             if linkage_ok:
-                _append_pv_to_rv_linkage_lines(body, namespace, message_name, signal)
-            if body:
+                _append_pv_to_rv_linkage_lines(stmts, namespace, message_name, signal)
+            if decls:
                 lines.append(f"on sysvar {sv_path}")
                 lines.append("{")
-                lines.extend(body)
+                lines.extend(decls)
+                lines.extend(stmts)
                 lines.append("}")
                 lines.append("")
 
         if signal.has_rv:
             member = f"{signal.name}_Rv"
             sv_path = f"{namespace}::{message_name}.{member}"
-            body = []
-            if has_burst and (signal.name, "_Rv") in watchable:
+            decls = []
+            stmts = []
+            want_burst = has_burst and (signal.name, "_Rv") in watchable
+            if want_burst:
+                _append_burst_trigger_decls(decls, signal, "_Rv")
+            if linkage_ok:
+                _append_rv_to_pv_linkage_decls(decls)
+            if want_burst:
                 _append_burst_trigger_lines(
-                    body, namespace, message_name, model, parsed, signal, "_Rv", member
+                    stmts, namespace, message_name, model, parsed, signal, "_Rv", member
                 )
             if linkage_ok:
-                _append_rv_to_pv_linkage_lines(body, namespace, message_name, signal)
-            if body:
+                _append_rv_to_pv_linkage_lines(stmts, namespace, message_name, signal)
+            if decls:
                 lines.append(f"on sysvar {sv_path}")
                 lines.append("{")
-                lines.extend(body)
+                lines.extend(decls)
+                lines.extend(stmts)
                 lines.append("}")
                 lines.append("")
 
         if has_burst and signal.has_special_value and (signal.name, "_use_special_value") in watchable:
             member = f"{signal.name}_use_special_value"
             sv_path = f"{namespace}::{message_name}.{member}"
-            body = []
-            _append_burst_trigger_lines(
-                body, namespace, message_name, model, parsed, signal, "_use_special_value", member
-            )
-            if body:
+            decls = []
+            stmts = []
+            _append_burst_trigger_decls(decls, signal, "_use_special_value")
+            if _append_burst_trigger_lines(
+                stmts, namespace, message_name, model, parsed, signal, "_use_special_value", member
+            ):
                 lines.append(f"on sysvar {sv_path}")
                 lines.append("{")
-                lines.extend(body)
+                lines.extend(decls)
+                lines.extend(stmts)
                 lines.append("}")
                 lines.append("")
 
