@@ -360,6 +360,50 @@ def resolve_channel(dbc_path: str, channel_mapping: Dict[str, int]) -> int:
     return channel_mapping.get(Path(dbc_path.replace("\\", "/")).name.lower(), 1)
 
 
+def resolve_dbc_path(dbc_path: str, project_path: Path) -> Optional[Path]:
+    """解析 DBC 文件绝对路径（支持绝对路径、相对项目路径、CANoe/dbc_file 下文件名）。"""
+    if not dbc_path:
+        return None
+    normalized = dbc_path.replace("\\", "/")
+    direct = Path(normalized)
+    if direct.is_file():
+        return direct
+    under_project = project_path / normalized
+    if under_project.is_file():
+        return under_project
+    by_name = project_path / "CANoe" / "dbc_file" / Path(normalized).name
+    if by_name.is_file():
+        return by_name
+    return None
+
+
+def load_message_frame_ids(dbc_path: str, project_path: Path) -> Dict[str, int]:
+    """从 DBC 读取 {报文名: frame_id}，用于生成 CAPL 的 message 声明。"""
+    resolved = resolve_dbc_path(dbc_path, project_path)
+    if resolved is None:
+        return {}
+    try:
+        import cantools
+
+        db = cantools.database.load_file(str(resolved))
+    except Exception as exc:
+        print(f"[capl_generator] 警告：无法解析 DBC {resolved}: {exc}")
+        return {}
+    return {msg.name: int(msg.frame_id) for msg in db.messages}
+
+
+def _message_decl(message_name: str, frame_id: Optional[int]) -> str:
+    """生成 CAPL message 变量声明。
+
+    优先使用 DBC 中的 CAN ID（如 message 0x293 msg_...），避免报文名里含 0x
+    （如 CIC_0x293）时被 CAPL 词法解析成十六进制字面量而编译失败。
+    """
+    var = _msg_var(message_name)
+    if frame_id is not None:
+        return f"  message 0x{frame_id:X} {var};"
+    return f"  message {message_name} {var};"
+
+
 # ----------------------------------------------------------------------------
 # CAPL 代码片段生成
 # ----------------------------------------------------------------------------
@@ -1030,6 +1074,7 @@ def _build_can_file(
     channel: int,
     messages: List[Tuple[Dict[str, Any], MessageModel]],
     parsed: "ParsedSysvar",
+    frame_ids: Optional[Dict[str, int]] = None,
 ) -> str:
     """生成单个发送节点的 .can 文件内容。"""
     namespace = dbc_name
@@ -1043,12 +1088,20 @@ def _build_can_file(
     out.append("}")
     out.append("")
 
+    frame_ids = frame_ids or {}
+
     # variables 块
     out.append("variables")
     out.append("{")
     for msg_cfg, model in messages:
         name = model.name
-        out.append(f"  message {name} {_msg_var(name)};")
+        frame_id = frame_ids.get(name)
+        if frame_id is None and frame_ids:
+            print(
+                f"[capl_generator] 警告：DBC 中未找到报文 {name!r}，"
+                f"将使用符号名声明 message（若编译失败请检查 DBC 或报文名）"
+            )
+        out.append(_message_decl(name, frame_id))
         out.append(f"  msTimer tmr_{name};")
         if _counter_enabled(msg_cfg, model):
             out.append(f"  long cnt_{name};")
@@ -1242,6 +1295,7 @@ def generate_capl(config: Dict[str, Any], project_path) -> List[str]:
         dbc_name = dbc_config.get("dbc_name", "")
         dbc_path = dbc_config.get("dbc_path", "")
         channel = resolve_channel(dbc_path, channel_mapping)
+        frame_ids = load_message_frame_ids(dbc_path, project_path)
 
         for sender in dbc_config.get("senders", []):
             sender_node = sender.get("sender_node", "")
@@ -1257,7 +1311,9 @@ def generate_capl(config: Dict[str, Any], project_path) -> List[str]:
             if not messages:
                 continue
 
-            content = _build_can_file(dbc_name, sender_node, channel, messages, parsed)
+            content = _build_can_file(
+                dbc_name, sender_node, channel, messages, parsed, frame_ids
+            )
             file_path = output_dir / f"{dbc_name}_{sender_node}.can"
             file_path.write_text(content, encoding="utf-8")
             generated.append(str(file_path))

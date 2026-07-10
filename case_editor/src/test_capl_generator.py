@@ -6,7 +6,13 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from capl_generator import generate_capl, parse_vsysvar, load_channel_mapping
+from capl_generator import (
+    generate_capl,
+    parse_vsysvar,
+    load_channel_mapping,
+    load_message_frame_ids,
+    _message_decl,
+)
 
 
 VSYSVAR = """<?xml version='1.0' encoding='utf-8'?>
@@ -70,6 +76,28 @@ VSYSVAR = """<?xml version='1.0' encoding='utf-8'?>
   </namespace>
 </systemvariables>
 """
+
+
+def test_message_decl_uses_dbc_frame_id(tmp_path=None):
+    """含 0x 的报文名应优先用 DBC 中的 CAN ID 声明 message。"""
+    import tempfile
+
+    dbc_text = (
+        'VERSION ""\n\n'
+        "NS_ :\n\n"
+        "BS_:\n\n"
+        "BU_: CIC\n\n"
+        "BO_ 659 CIC_0x293: 8 CIC\n"
+        ' SG_ Demo_Signal : 0|8@1+ (1,0) [0|255] "" Vector__XXX\n'
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        dbc_path = base / "CANoe" / "dbc_file" / "Control.dbc"
+        dbc_path.parent.mkdir(parents=True, exist_ok=True)
+        dbc_path.write_text(dbc_text, encoding="utf-8")
+        frame_ids = load_message_frame_ids(str(dbc_path), base)
+        assert frame_ids["CIC_0x293"] == 0x293
+        assert _message_decl("CIC_0x293", frame_ids["CIC_0x293"]) == "  message 0x293 msg_CIC_0x293;"
 
 
 def test_control_sample_vsysvar():
@@ -178,6 +206,8 @@ def main():
 
 
 if __name__ == "__main__":
+    test_message_decl_uses_dbc_frame_id()
+    print("=== test_message_decl_uses_dbc_frame_id passed ===")
     test_control_sample_vsysvar()
     print("=== test_control_sample_vsysvar passed ===")
     main()
