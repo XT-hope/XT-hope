@@ -1,0 +1,62 @@
+1. 上位机软件
+	1.1 ControlDesk：工程运行及界面控制软件（实验管理软件），可用于sdf模型的导入，UI界面的开发等。用于电子控制单元(ECU)开发的通用模块化实验和仪器软件。
+	1.2 ConfigurationDesk：通道接口配置软件，模型开发，硬件接口配置以及相关总线配置，所有I/O功能可通过Configuration软件进行配置（软件和硬件接口，总线模型架构的匹配）。配置和实现dSPACE的实时硬件与软件的链接。
+	1.3 传感器开发：支持OpenX系列
+		1.3.1 ModelDesk：传感器仿真--场景开发，还可以定义设置车辆动力学模型，环境模型（驾驶员模型，转角，方向盘扭矩等）。用于参数化和模拟的图形用户界面。
+		1.3.2 aurellion：传感器仿真--场景渲染，3D显示，传感器的配置。
+	1.4 matlab/simulink
+
+2. 下位机
+	2.1 scalexio：高度通用的硬件在环仿真器，实时机
+
+模型：
+1. ASM_Traffic：环境模型，车辆动力学模型，driver，domainControl，driveTrain，engine，electricalSystem
+2. CAN模型：仿的是实车上的虚拟节点，包括车上所需不同CAN（有9路CAN，比如chassis CAN，control CAN和5路毫米波雷达CAN，Dilink CAN， DSI3 CAN）
+3. 以太网模型：
+3.1 IMU_SOMEIP
+3.2 Lidar_Model
+3.3 GNSS_Model
+
+CAN 模型（Configuration Desk软件）：控制器通过CAN通讯接收传感器及地盘，车身等的信号，并将智驾控制信号通过CAN通讯传递给对应的执行器。Dspace通过Configuration Desk下的BusManager工具导入DBC配置CAN通讯，将仿真信息发送给控制器并接受控制器发出的信息。
+1. 新建CAN bus并命名比如BusConfig_Chassis_CAN
+2. 导入相应的dbc文件
+3. 将Direction为“TX”的信号（域控需要接收的信号）拖入到“Simulated ECUs”，这意味着建立了仿真ECU/SoftECU
+4. 然后给拖入Simulated ECUs中的报文添加Feature，即选中这些报文并由右键单击选择add feature，另外你也可以
+右键Simulated ECUs并选择select elements types-->Bus Isignal IPDU，这样也能选中你所想要的信号，然后右击add feature，可以选择
+按trigger形式发送，或者频发等，此次项目中需要选择PDU enable，PDU Trigger，PDU Cyclic Timing Control这3个feature。
+5. 为有Counter的报文添加cunter的feature，选中报文下的counter并右击选择add feature-->Counter Signal，然后就可以在添加的Counter signal下面设置Maximum value，Minimum value，Increment value等参数（一般只需要设置这三个参数），这个counter会自动读取dbc中对应报文的counter的信息，为防止读错可以自己去看一下dbc文件，并对比一下此处counter的参数有没有读取错误。
+6. 为有check_sum的报文额外再添加一个feature，右键点击该报文并选择add feature --> PDC User Code。然后可以点击添加的PDU_User_Code设置checkSum的参数，一般只设置参数User code ID（需要填写所选校验算法的文件名，例如某文件夹下的CRC16算法）和Number of user signals（需要输入校验算法信号的个数），User signal[0]（这是一个下拉菜单可以选择具体的校验信号），checksum的校验算法文件都需要保存在
+ConfigurationDesk工程目录下的CustomFunctions中
+7. 将真实域控发出的报文即direction为“TX”的信号拖入到Inspection中。（比如这其中的空车的信号可以和动力学软件做闭环）
+8. 为添加在Inspection中的信号添加feature，即选中这些信号右键点击并选择add feature-->ISignal Value，这样添加之后在后面的调试中在Control Desk中就可以显示或者更改相应的数值。
+9. 选中这些报文并且右击add feature --> PDU RX Status (对于Control Desk来说是接收)，这样就设置了这些报文为接收报文。
+10. 上述为配置报文信息，接下来要为这些报文配置相应的CAN通道（就是说配置这些报文具体是由哪个通道发送的），首先从Signal Chain界面下的Functions中将所需模块（比如CAN）拖入到中间的Functions区域，并左键点击拖入的模块可在右侧的设置栏中选择general配置其属性，如果是CAN的话可以配置比如CAN名称，波特率，采样点，是不是CAN FD等等。
+11. 配置好CAN通道后，接下来配置相应的真实硬件通道，这样他们就可以关联起来，点击选择右侧的设置栏中的Electrical Interface，在Assigned channel set中选择CAN办卡，在CAN Ch中选择一个CAN通道。
+12. 定义好虚拟通道和硬件通道之后在buses界面下的Bus Access Requests中给Simulated ECUs和Inspection（逐级展开的最后一层就能看到这两个SoftECU）配置对应通道，这样就算是把要仿的报文/信号和通道做好了对应关系。那么在接下来的仿真中
+就能通过对应的通道连接到域控实现CAN通信。
+13. 将要发送的报文或者接收的报文关联到Control Desk上，选择buses界面下的Bus Configuration Ports，ctrl+A选中全部，然后右键点击 ”Test Automation Support“ 列并选择Fill with one of --> Enabled
+14. 将要发送的报文或者接收的报文或者其他需要的信号（如Event报文，如有触发逻辑需通过模型来控制的，或者根据项目需求设置一些CAN节点开关需要通过模型来控制的等）关联到Simulink上，选择buses界面下的Bus Configuration Ports，选中需要设置的信号，然后右键点击 ”Model Access“ 列并选择Fill with one of --> Enabled
+15. 信号/报文关联好Control Desk和Simulink之后，接下来生成具体的simulink模型接口。点击”Signal Chain“界面，然后左键点击中间区域的Function模块，接着选择右侧区域的”Model Interface“，左键点击Model Interface 下方的灰色空白区就会出现属性设置，选择Model Port block structure（设置这个的目的是可选择整路CAN的形式或者报文的形式或者以单个信号的形式生成一个接口）：Block-based（基于原始的整个树结构生成），Function_based（基于报文pdu分类，意味着每一条报文生成一个接口），Port_based（基于报文下的信号分类）
+16. 设置后模型接口的生成方式之后，在Signal_chain的中间区域选择Model Port Block模块，并在空白处右键点击并选择 Model port block structure --> Function based（如果上一步选择的是Function based），然后就会在Simulink中生成对应的接口。
+17. 可以在CAN_Model中整理由ConfigurationDesk BusManager生成的Model Port（比如将EPS相关的报文都整理到同一个模块下），并对信号赋值或者逻辑关联，形成soft-ECU（怎么整理）
+
+ETH模型
+1. 域控通过ETH通讯接收IMU，Lidar，GNSS等传感器信息，dSpace通过ETHCT工具导入ARXML配置ETH通讯，配置硬件通道，生成simulink模型并与ASM计算出的相关仿真数据进行关联，并将仿真信息发送给域控。
+2. 在Ethrnet Configuration Package中的ETHCP Configuration Tool中
+	2.1 Create a new configuration（一般创建在Simulation/BusSystem目录下，并将ARXML文件也放在该目录下），Name it and Save the Project
+	2.2 Import a communication cluster from ARXML file（导入ARXML文件，cp类型的）
+	2.3.1 Select elements from matrix to be simulated/ inspected（和CAN模型有些类似，将需要仿真的节点拖入到右侧的Configuration Data）
+	2.3.2 点击Tools并选择General Properties，在General Properties中的General模块base path（可以设置成第一步的共文件夹目录）
+	2.4 Controller mapping, config. Build Path & Save the Project（为仿真节点分配硬件通道，在General Properties中的Controller Configuration模块中选择Simulator Controller这一列并填入相应的硬件通道名称（具体名称可以在control desk中查看到））
+	2.5 Generate code for ETH, Blockset Configuration（返回主界面点击Generate Code会生成一些相关的 .m和 .c的文件），这些文件可以用来生成Simulink接口
+	2.6 打开matlab选择该工程路径，命令窗口执行 ethernetconfig_modelgenerate('Untitled_data.m') Untitled_data.m就是工程文件夹中由上一步的generate code生成的****.m文件，执行之后会生成以太网ETH对应的Simulink模型。
+	2.7 将生成的ETHERNETCONFIG Basic Configuration, ETHERNETCONFIG Electronic Control Units, Configuration Info三个模块拖入到目标simulink模型。
+	2.8 逐层点开ETHERNETCONFIG Electronic Control Units找到Payload上发送的信号并根据需求对信号赋值
+	2.9 编译完成后可通过controlDesk观察信号变化。
+
+多核模型：RTPC支持多核配置，除RTPC本身需占有一个核外，还有n-1个核可以使用。创建好Simulink模型之后需要导入ConfigurationDesk进行Task的配置，核于核之间的信号传输可任意使用bus2vector，bus2vector可以通过在matlab命令行窗口输入ds_labelinterface_lib找到。
+
+DS6341：CAN/CANFD的4channel板卡
+DS2907: 电源程控板卡
+DS6333：以太网办卡，M1车载以太网，M2通用的以太网
+智驾模型比较复杂所以scalexio processing unit选用的类型是HPP，还有种类型是HCP（密集计算型）
