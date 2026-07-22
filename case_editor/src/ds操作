@@ -1,0 +1,133 @@
+Model desk 如何创建工程及解释：https://blog.csdn.net/weixin_43276390/article/details/127996524，
+https://blog.csdn.net/weixin_43276390/article/details/134684516
+
+1. 在Model Desk创建工程项目test，在test文件目录下会出现5个工程文件夹
+      Animation-->MotionDesk工程文件
+      Automation-->AutomationDesk工程文件
+      Instrumentation-->ControlDesk工程文件
+      Parameterization-->ModelDesk工程文件
+      Simulation-->Simulink仿真模型（基模型）
+
+2. 在Model Desk的菜单栏home下可以选择open control desk，这样等于打开control desk，再打开ControlDesk工程文件
+
+3. 在matlab中运行Simulation文件夹下的go文件则会打开Simulink仿真模型，simulink中的模型参数和model desk中的Parametersets对应
+
+
+
+----------------------------------------------------------------------------------------------
+
+1. 操作步骤
+1.1 打开control desk，model desk，aurellion
+1.2 control desk 先选择场景/搭建场景
+1.2.1 如果是选择场景，选择完直接active all 再 download all (这个是在model desk的左侧菜单栏中的mod_traffic下的Experment_001中)
+1.2.2 如果是搭建场景，搭建完场景后要保存，激活再download，再在选择场景的地方选择刚刚创建的场景，再active all并且download all 
+1.3 场景运行前要先杀死域控自带的imu进程IMU_kill.sh，并且在VM中的PyCharm中启动运行transmit.py脚本（这是一个cyber RT中间件用于传输IMU模型的数据给域控）
+1.3 aurellion点击同步synchonize
+1.4 虚拟机启动，cd到/userdata/record（这是用来保存record数据的路径），启动/app/script/record.sh （192.168.195.3）
+1.4 如果需要记录CAN数据，先打开CANOE，然后点击start，场景运行结束后点击stop，在trace界面右键点击import/export-->export，然后保存，一般选择blf格式
+1.5 control desk界面，先reset vehicle，然后start maneuver
+1.6 场景执行结束后，虚拟机窗口ctrl+C 结束record.sh脚本
+1.7 保存后的blf文件可以在CANOE回放，另外在程序执行时可以在control desk的monitor或者CANOE的trace窗口监控报文
+1.8 如果aurellion出现问题，或者场景运行的时候卡住了，可以在aurellion点击reset，再在control desk界面，先reset vehicle，然后start maneuver
+1.9 激活算法就是在control desk界面点击Dipilot
+1.10 control desk点击start场景运行起来之后，在导航上选择导航终点（推荐这样做），也可以先选择导航终点再start场景
+1.11 cd /app（192.168.195.3），再运行./script/monitor.sh，可以用来实时监控topic，执行之后会出现所有的topic列表，选中某一条，键盘上按方向键右键->就能看到这个topic的实时信息，
+键盘左键<-可返回topic列表，也可以按page down/up翻页
+1.12 查看topic: /localization/ld_mapmatch_result，如果这个topic中link_id为0，就说明算法没有获取到当前道路的道路id，因此进入CNOA ready的状态，解决办法是先停止IMU的发送脚本transmit.py 
+IMU脚本在VM中的PyCharm中，再次运行transmit脚本，再重新导航一下，如果还解决不了就给域控下电（在control desk上按Power On），在重启ESI（视频注入的开关（3个都要重启）），
+重启成功后再在model desk中重新active和download场景，再aurellion重新同步，最后在control desk 点击power on，Lidar On，再在SubtitueValue/ModelValue中选择Subtitue并选中HNOA，再reset和start
+
+
+2. aurellion配置车辆物理模型/摄像头/激光雷达/毫米波雷达
+2.1 打开aurellion 
+2.2 点击选择Vehicles，选择一辆车，在sensor Pool中可以拖动一个摄像头/雷达到车身上，然后在Sensors Instances 中可以为这个摄像头/雷达填写position/rotation的信息
+2.3 在aurellion-->的Sensors菜单可以新填或者修改一个camera/lidar/radar，然后命名并且在Sensor configuration中输入相关的配置文件（这种配置文件一般是将收集到的摄像头/雷达的参数交给Dspace，然后他们给出对应的配置文件）
+
+
+
+3. Model Desk 场景
+3.1 静态场景rd地图 Environment-->New Road 
+3.1.1 新建之后能看到Road 2-D Preview，Road Network，Properties这三四窗口
+      Road 2-D Preview：新建道路的2D显示
+
+      Road Network：已经定义完成的道路和节点列表，单击打开道路或节点进行修改和配置。点击其中的一条道路可以查看或者设置其初始x坐标，y坐标和与x轴的夹角
+      Road Network同窗口中还可以选择Marker，Routes，Objects，Signal Groups
+      Routes：定义车辆在道路和节点上行驶顺序的信息，可以添加多个route
+      Objects：交通指示物，例如信号灯（应该是只能查看但是不能创建）
+      Marker：不可见的标记，用于驾驶剧本的距离运算参考点 
+
+      Properties-->Road Network Global：主要设置道路名称，道路描述，车道宽度计算类型，高度内插方式等等
+      单击Road 2-D Preview中的具体道路 Properties窗口会切换成Road Network element：这当中包含道路名称name，道路id，作者author，道路起始点位置position，道路路面条件surface condition，road lenth，行驶方向driving direction
+      双击Road 2-D Preview中的具体道路会跳出一个新窗口Road 1 -D Preview和Segments：
+            新窗口中Road 1 -D Preview包含同级窗口选项Road 1-D Preview，Height Profile（设置高度信息），Lateral Slope Prpfile（道路倾斜的角度）
+            新窗口Segments中包含同级窗口segments，lanes，scenery，surface，marker，objects，shapes
+                segments窗口中可以添加新的道路segment，还可以设置segment的类型type：比如圆弧circular，直线straight，螺旋线spline，clothoid，如果创建的多个segment，那么这条道路就是有这几种几何geometry组成
+                lanes窗口中可以为道路添加或者删除车道，并且点击对应的车道id后Properties面板会变成设置车道属性，可以设置车道id，width，isdrivable，车道线的Lines（roadmark），另外还可以添加append lane section，这么做之后就可以创建比如三车道变两车道的道路
+                scenery窗口中可以设置当前道路segment的类型（道路类型），比如City，Highway，CountryRoad，bridge等
+                surface窗口中可以右键点击选择new surface设置路面信息，比如摩擦系数
+                marker窗口中可以右键点击选择new可以添加marker
+                objects窗口中可以右键点击选择new可以添加静态交通元素，比如交通标志牌，障碍物，行人，车辆等
+                shapes窗口中可以右键点击选择new可以添加自定义车道线line，轨迹trajectory，连续物体continuous objects，有间隔物体repeating object（按一定间隔摆放）
+                    如果选择line，shapes窗口会出现一个新的roadshape，类型为line，左键点击这个roadShape后，然后再road 1-D previre窗口可以编辑这个自定义车道线，可以右键车道线结束位置的橙色原点选择insert after添加新的后续节点，这样就可以自由控制车道线的形状和长度
+                    如果选择trajectory，shapes窗口会出现一个新的roadshape，类型为trajectory，左键点击这个roadShape后，然后再road 1-D previre窗口可以编辑这个自定义车道线，可以右键车道线结束位置的橙色原点选择insert after添加新的后续节点，这样就可以自由控制轨迹的节点和形状还有长度。
+                    另外如果想要车辆可以选择这条轨迹行驶，就需要将这一条trajectory添加到routes中窗口中，具体操作，切换到routes窗口右键点击选择create route新建一个route，将path设置成trajectory的名称（比如road shape 2 ）。
+                    注意：轨迹线的起始点和结束点一定要在道路节点位置（起始和结束位置）
+                    continuous objects，repeating object的操作是类似的（区别是这两个需要选中之后在Properties选择一个object以及再设置一些参数）
+
+      Junction：
+            可以在road Network 2-D Preview先创建一条道路，然这个道路的左/右端左键点击选中这个端点再右键点击选择new junction 
+            也可以直接在road Network 2-D Preview中的空白处直接右键点击选择new junction 
+            一条独立道路和一个独立的junction有两种方法可以实现连接：
+                直接将左键拖动道路/junction靠近junction/道路，接近是会有黄色标记，连上去就可以
+                左键点击junction的一个端点，右键点击选择junction（modify）后四周可被链接的其他道路的端点就会变黄，选择一个黄色端点就能实现连接
+            如果道路和junction的车道不能匹配，可以选择adaption来进行匹配
+      创建完之后save，active，download
+
+3.2 动态场景 Environment-->New Scenario 
+3.2.1 新建之后会出现两个模块，一个是maneuver M1（用来设置主车）和 Traffic F1(fellow用来设置目标车)，这些模块都是流程化设计，圆点表示起始，箭头表示条件，矩形框表示事件/行为
+      Maneuver（Fellows）的组成：Maneuver=Sequences，Sequence=Satrt Segment+Segments，Segment=activity（事件/行为）+transition（条件）
+      点击M1可以设置主车的Name，Vehicle Object（可以从objects选择一个车辆模型），Traffic Driver（驾驶员模型），Open Traffic Driver
+      点击Fellow比如F1可以设置该目标车的Name，Traffic Object（可以从objects选择一个车辆模型），Traffic Driver（驾驶员模型），Open Traffic Driver
+      左键点击初始圆点可以设置车辆的初始状态信息：
+            name
+            route
+            reverse direction
+            reverse possible
+            start position on route
+            Initial lane index
+            additional lateral offset 横向偏执
+            Vehicle orientation 朝向
+            Initial longitudinal velocity
+            Initial height mode 
+            Initial height value 
+      左键点击箭头可以设置事件/行为的触发条件
+            Enable delay 是否添加延迟，如果添加就要在Condition delay中设置延迟时间
+            Condition delay 设置延迟时间
+            Conditions 可以添加/删除触发条件：
+                  add Duration 仿真持续时间
+                  add endless 直到仿真结束
+                  add Immediate 立刻
+                  add Position 相对某一个参考物的距离（主车的参考物好像只能设置自己）
+                  add Driven distance 行驶的距离
+                  add Distance (between main points) 某两辆车的距离（比如当F1与F2的距离为50m的时候，欧氏距离）
+                  add Distance (along road reference line) 某两辆车的距离（比如当F1与F2的距离为50m的时候，沿参考线的距离）
+                  add Velocity 速度触发
+                  add Trigger 外部trigger
+                  add Lateral acceleration 横向加速度（只有主车有）
+                  add Time Gap 时间间隔（只有目标车有）
+      左键点击矩形框可以设置事件/行为
+            description：事件描述
+            longitudinal type（主车纵向事件类型）: Lateral acceleration(横向加速度)，Pedal stimulus，Standstill，stop，traffic driver，Velocity
+            longitudinal Properties（纵向事件的参数，每种事件的属性参数不同，这里就不细述，可以之间在control desk中查看）
+            Lateral type（主车横向事件类型）：Basic road，Follow road（跟随道路，算法介入之前选择这个），Not used，Stimulus angle（角度控制，算法介入后一般选择这个）
+            Lateral Properties（横向事件的参数，每种事件的属性参数不同，这里就不细述，可以之间在control desk中查看）
+
+            longitudinal type（目标车纵向事件类型）: Acceleration(加速度)，Continue，Distance（m），Distance（s），Not used，Position，Stop，Traffic Driver，Velocity
+            Lateral type（目标车横向事件类型）：Continue，Lane selection，Lateral deviation（横向偏移），Not used
+
+            Fellow user signals(只针对目标车)：独立于Maneuver和Fellows的自定义用户信号，用于一些转换条件的情况（很少用）
+
+      左键选中矩形框然后右键点击选择Insert Segment可以继续添加或者delete删除一个矩形框事件
+
+      在Traffic的空白处右击可以选择新建一个Fellow（目标车），也可以选中一个Fellow然后右键点击选择删除
+
