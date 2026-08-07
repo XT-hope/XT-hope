@@ -13,6 +13,9 @@ CAPL 生成器
 - 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；报文对象 msg.信号 赋物理值。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动，并做防抖避免 on sysvar 互相触发死循环。
+- 多路复用报文：周期/CE/CA 正常周期发送按 multiplexer_id 从小到大连续 output（无 delay）；
+  Event/CE/CA 快周期 burst 仅发送触发信号所属 group；burst 结束后将 Mux 信号 sysvar 恢复为初始值。
+  多路复用元数据全部来自 .vsysvar（_is_multiplexed / _is_multiplexer / _multiplexer_id），生成期写死。
 """
 from __future__ import annotations
 
@@ -41,6 +44,8 @@ _SIGNAL_SUFFIXES = [
     "_use_special_value",
     "_has_inactive_value",
     "_use_inactive_value",
+    "_multiplexer_id",
+    "_is_multiplexer",
     "_special_value",
     "_inactive_value",
     "_SigSendType",
@@ -77,6 +82,8 @@ class SignalModel:
     rv_min: Optional[str] = None
     rv_max: Optional[str] = None
     pv_is_int: bool = True
+    pv_start: Optional[str] = None
+    rv_start: Optional[str] = None
     has_special_value: bool = False
     has_inactive_value: bool = False  # 用于 IfActive/CA 判定，不参与赋值
     inactive_raw: Optional[str] = None
@@ -84,6 +91,9 @@ class SignalModel:
     has_rv: bool = False
     has_sig_send_type: bool = False
     sig_send_type: SigSendTypeTable = field(default_factory=SigSendTypeTable)
+    is_multiplexer: bool = False
+    has_multiplexer_id: bool = False
+    multiplexer_id: Optional[int] = None
 
 
 @dataclass
@@ -96,6 +106,17 @@ class MessageInfoModel:
     has_msg_nr_of_repetition: bool = False
     has_wrong_crc_flag: bool = False
     has_wrong_counter_flag: bool = False
+    has_is_multiplexed: bool = False
+    is_multiplexed: bool = False
+
+
+@dataclass
+class MuxMetadata:
+    """多路复用报文的生成期元数据（来自 .vsysvar，运行时不推断）。"""
+    mux_signal_name: str
+    mux_signal: SignalModel
+    groups: List[int]
+    initial_value: str
 
 
 @dataclass
@@ -105,6 +126,7 @@ class MessageModel:
     signals: List[SignalModel] = field(default_factory=list)
     signal_index: Dict[str, SignalModel] = field(default_factory=dict)
     info: Optional[MessageInfoModel] = None
+    mux: Optional[MuxMetadata] = None
 
     def get(self, signal_name: str) -> Optional[SignalModel]:
         return self.signal_index.get(signal_name)
@@ -172,6 +194,18 @@ def _build_sig_send_type_table(choices: Dict[int, str]) -> SigSendTypeTable:
     )
 
 
+def _is_truthy_start_value(text: Optional[str]) -> bool:
+    if text is None:
+        return False
+    value = text.strip().lower()
+    if value in ("1", "true"):
+        return True
+    try:
+        return float(value) != 0
+    except ValueError:
+        return False
+
+
 def _build_message_info_model(message_name: str, members: List[ET.Element]) -> MessageInfoModel:
     model = MessageInfoModel(message_name=message_name)
     prefix = f"{message_name}_"
@@ -191,6 +225,9 @@ def _build_message_info_model(message_name: str, members: List[ET.Element]) -> M
             model.has_wrong_crc_flag = True
         elif name == f"{message_name}_WrongCounterFlag":
             model.has_wrong_counter_flag = True
+        elif name == f"{message_name}_is_multiplexed":
+            model.has_is_multiplexed = True
+            model.is_multiplexed = _is_truthy_start_value(member.get("startValue"))
     return model
 
 
@@ -260,8 +297,43 @@ def parse_vsysvar(vsysvar_path: str) -> ParsedSysvar:
         model = _build_message_model(var_name, members)
         if model.signals:
             model.info = result.message_infos.get(var_name)
+            _finalize_mux_metadata(model)
             result.messages[var_name] = model
     return result
+
+
+def _finalize_mux_metadata(model: MessageModel) -> None:
+    """根据 .vsysvar 元数据建立多路复用生成信息（运行时不推断）。"""
+    info = model.info
+    if info is None or not info.is_multiplexed:
+        model.mux = None
+        return
+
+    mux_signal: Optional[SignalModel] = None
+    groups: set[int] = set()
+    for signal in model.signals:
+        if signal.is_multiplexer:
+            mux_signal = signal
+        elif signal.has_multiplexer_id and signal.multiplexer_id is not None:
+            groups.add(signal.multiplexer_id)
+
+    if mux_signal is None or not groups:
+        model.mux = None
+        return
+
+    if mux_signal.has_pv and mux_signal.pv_start is not None:
+        initial_value = _to_capl_number(mux_signal.pv_start, "0")
+    elif mux_signal.has_rv and mux_signal.rv_start is not None:
+        initial_value = _to_capl_number(mux_signal.rv_start, "0")
+    else:
+        initial_value = "0"
+
+    model.mux = MuxMetadata(
+        mux_signal_name=mux_signal.name,
+        mux_signal=mux_signal,
+        groups=sorted(groups),
+        initial_value=initial_value,
+    )
 
 
 def _build_message_model(message_name: str, members: List[ET.Element]) -> MessageModel:
@@ -290,10 +362,12 @@ def _apply_member(signal: SignalModel, suffix: str, member: ET.Element) -> None:
     if suffix == "_Pv":
         signal.has_pv = True
         signal.pv_is_int = member.get("type", "int") == "int"
+        signal.pv_start = member.get("startValue")
     elif suffix == "_Rv":
         signal.has_rv = True
         signal.rv_min = member.get("minValue")
         signal.rv_max = member.get("maxValue")
+        signal.rv_start = member.get("startValue")
     elif suffix == "_Factor":
         signal.factor = member.get("startValue", "1")
     elif suffix == "_Offset":
@@ -306,6 +380,14 @@ def _apply_member(signal: SignalModel, suffix: str, member: ET.Element) -> None:
     elif suffix == "_SigSendType":
         signal.has_sig_send_type = True
         signal.sig_send_type = _build_sig_send_type_table(_parse_value_table(member))
+    elif suffix == "_is_multiplexer":
+        signal.is_multiplexer = _is_truthy_start_value(member.get("startValue"))
+    elif suffix == "_multiplexer_id":
+        signal.has_multiplexer_id = True
+        try:
+            signal.multiplexer_id = int(float(member.get("startValue", "0")))
+        except (TypeError, ValueError):
+            signal.multiplexer_id = 0
 
 
 def _read_text_any_encoding(path: str) -> str:
@@ -560,6 +642,36 @@ byte PROJ_Checksum(byte data[], long len)
 """
 
 
+def _burst_mux_var(message_name: str) -> str:
+    return f"burst_mux_{message_name}"
+
+
+def _mux_groups_var(message_name: str) -> str:
+    return f"g_mux_groups_{message_name}"
+
+
+def _is_mux_message(model: MessageModel) -> bool:
+    return model.mux is not None
+
+
+def _mux_sysvar_member(namespace: str, message_name: str, mux: MuxMetadata) -> str:
+    mux_signal = mux.mux_signal
+    if mux_signal.has_pv:
+        return _sysvar(namespace, message_name, f"{mux_signal.name}_Pv")
+    return _sysvar(namespace, message_name, f"{mux_signal.name}_Rv")
+
+
+def _build_mux_signal_assignment(
+    message_name: str, mux: MuxMetadata, mux_id_expr: str
+) -> str:
+    msg = _msg_var(message_name)
+    mux_signal = mux.mux_signal
+    factor_lit = _format_float(mux_signal.factor, "1")
+    offset_lit = _format_float(mux_signal.offset, "0")
+    phys = _phys_expr(mux_id_expr, factor_lit, offset_lit)
+    return f"  {msg}.{mux.mux_signal_name} = {phys};"
+
+
 def _build_fill_function(
     namespace: str,
     message_name: str,
@@ -571,38 +683,149 @@ def _build_fill_function(
     check_method: str,
     check_parameters: Dict[str, Any],
 ) -> List[str]:
-    """生成填充并发送一条报文的函数体（设置信号、counter、checksum）。
+    """生成填充报文函数。多路复用报文生成 fill_{msg}_group(long mux_id)。"""
+    if _is_mux_message(model):
+        return _build_fill_group_function(
+            namespace,
+            message_name,
+            model,
+            parsed,
+            has_validation,
+            counter_signal,
+            check_signal,
+            check_method,
+            check_parameters,
+        )
+    return _build_fill_plain_function(
+        namespace,
+        message_name,
+        model,
+        parsed,
+        has_validation,
+        counter_signal,
+        check_signal,
+        check_method,
+        check_parameters,
+    )
 
-    仅当 has_validation 为真时才生成 counter 递增与 checksum 计算；否则只填普通信号。
-    """
+
+def _build_fill_plain_function(
+    namespace: str,
+    message_name: str,
+    model: MessageModel,
+    parsed: ParsedSysvar,
+    has_validation: bool,
+    counter_signal: str,
+    check_signal: str,
+    check_method: str,
+    check_parameters: Dict[str, Any],
+) -> List[str]:
+    """生成非多路复用报文的 fill_{message}()。"""
+    lines: List[str] = []
+    lines.append(f"void fill_{message_name}()")
+    lines.append("{")
+    lines.extend(
+        _build_fill_body_lines(
+            namespace,
+            message_name,
+            model,
+            parsed,
+            has_validation,
+            counter_signal,
+            check_signal,
+            check_method,
+            check_parameters,
+            mux_id_expr=None,
+        )
+    )
+    lines.append("}")
+    lines.append("")
+    return lines
+
+
+def _build_fill_group_function(
+    namespace: str,
+    message_name: str,
+    model: MessageModel,
+    parsed: ParsedSysvar,
+    has_validation: bool,
+    counter_signal: str,
+    check_signal: str,
+    check_method: str,
+    check_parameters: Dict[str, Any],
+) -> List[str]:
+    """生成多路复用报文的 fill_{message}_group(long mux_id)。"""
+    lines: List[str] = []
+    lines.append(f"void fill_{message_name}_group(long mux_id)")
+    lines.append("{")
+    lines.extend(
+        _build_fill_body_lines(
+            namespace,
+            message_name,
+            model,
+            parsed,
+            has_validation,
+            counter_signal,
+            check_signal,
+            check_method,
+            check_parameters,
+            mux_id_expr="mux_id",
+        )
+    )
+    lines.append("}")
+    lines.append("")
+    return lines
+
+
+def _build_fill_body_lines(
+    namespace: str,
+    message_name: str,
+    model: MessageModel,
+    parsed: ParsedSysvar,
+    has_validation: bool,
+    counter_signal: str,
+    check_signal: str,
+    check_method: str,
+    check_parameters: Dict[str, Any],
+    mux_id_expr: Optional[str],
+) -> List[str]:
+    """生成 fill 函数体（普通报文或指定 mux group）。"""
     msg = _msg_var(message_name)
     cnt_var = f"cnt_{message_name}"
+    mux = model.mux
 
-    # 未启用校验的报文不处理 counter/checksum。
     if not has_validation:
         counter_signal = ""
         check_signal = ""
 
     has_counter = bool(counter_signal) and model.get(counter_signal) is not None
     has_checksum = bool(check_signal) and model.get(check_signal) is not None
-    need_crc_buf = has_checksum  # 仅在需要 checksum 时声明 CRC 缓冲变量
+    need_crc_buf = has_checksum
 
     lines: List[str] = []
-    lines.append(f"void fill_{message_name}()")
-    lines.append("{")
     if need_crc_buf:
         lines.append("  byte _data[64];")
         lines.append("  long _i, _n;")
         lines.append("  dword _crc;")
         lines.append("")
 
-    # 1) 普通信号：special > 普通值（不再使用 inactive 赋值）
+    if mux is not None and mux_id_expr is not None:
+        lines.append(_build_mux_signal_assignment(message_name, mux, mux_id_expr))
+
     for signal in model.signals:
+        if mux is not None and signal.name == mux.mux_signal_name:
+            continue
         if signal.name in (counter_signal, check_signal):
             continue
-        lines.extend(_build_signal_assignment(namespace, message_name, signal))
+        assignment = _build_signal_assignment(namespace, message_name, signal)
+        if mux is not None and mux_id_expr is not None and signal.has_multiplexer_id:
+            lines.append(f"  if (mux_id == {signal.multiplexer_id})")
+            lines.append("  {")
+            lines.extend(f"  {line}" for line in assignment)
+            lines.append("  }")
+        else:
+            lines.extend(assignment)
 
-    # 2) counter：写当前值，再递增；WrongCounterFlag==1 时在结果上 +1
     if has_counter:
         counter = model.get(counter_signal)
         cmin = _to_capl_number(counter.rv_min, "0")
@@ -619,9 +842,6 @@ def _build_fill_function(
         lines.append("  else")
         lines.append(f"    {cnt_var} = {cnt_var} + 1;")
 
-    # 3) checksum：先清零，再对整条报文数据计算校验值。
-    #    覆盖范围当前为“整条报文数据字节（校验字段已清零）”。如需排除 counter / 含 DataID，
-    #    仅需调整下面读取 _data 的范围与 _n。
     if has_checksum:
         method = (check_method or "crc16").strip().lower()
         params = check_parameters or {}
@@ -630,7 +850,6 @@ def _build_fill_function(
         chk_offset = _format_float(chk.offset, "0")
         crc_phys = _phys_expr("_crc", chk_factor, chk_offset)
         lines.append("")
-        # 清零：物理值取 Offset 使该字段的 raw 为 0（Offset 通常为 0）。
         lines.append(f"  {msg}.{check_signal} = {chk_offset};")
         lines.append(f"  _n = {msg}.dlc;")
         lines.append("  for (_i = 0; _i < _n; _i++)")
@@ -650,8 +869,6 @@ def _build_fill_function(
             lines.append("    _crc = _crc + 1;")
         lines.append(f"  {msg}.{check_signal} = {crc_phys};")
 
-    lines.append("}")
-    lines.append("")
     return lines
 
 
@@ -743,11 +960,15 @@ def _restore_pending_var(message_name: str, member_name: str) -> str:
     return f"restore_pending_{message_name}_{member_name}"
 
 
-def _build_burst_variables(message_name: str, model: MessageModel, exclude: Optional[set] = None) -> List[str]:
+def _build_burst_variables(
+    message_name: str, model: MessageModel, exclude: Optional[set] = None
+) -> List[str]:
     lines = [
         f"  long burst_left_{message_name};",
         f"  long burst_fast_{message_name};",
     ]
+    if _is_mux_message(model):
+        lines.append(f"  long {_burst_mux_var(message_name)};")
     for signal, suffix in _watchable_members(model, exclude):
         member = f"{signal.name}{suffix}"
         capl_type = _capl_member_type(signal, suffix)
@@ -808,6 +1029,10 @@ def _build_finish_burst_function(
         lines.append(f"    {pending} = 0;")
         lines.append("  }")
     lines.append(f"  burst_fast_{message_name} = 0;")
+    if model.mux is not None:
+        mux_sv = _mux_sysvar_member(namespace, message_name, model.mux)
+        lines.append(f"  {mux_sv} = {model.mux.initial_value};")
+        lines.append(f"  {_burst_mux_var(message_name)} = -1;")
     lines.append(f"  if ({send_type_expr} == {MSG_SEND_EVENT} || {send_type_expr} == {MSG_SEND_IF_ACTIVE})")
     lines.append("    return;")
     lines.append(f"  arm_{message_name}();")
@@ -921,6 +1146,12 @@ def _append_burst_trigger_lines(
     lines.append(f"    {_restore_pending_var(message_name, member)} = 1;")
     lines.append(f"    {_restore_var(message_name, member)} = _old;")
     lines.append(f"    {shadow} = _new;")
+    if model.mux is not None:
+        burst_mux = _burst_mux_var(message_name)
+        if signal.is_multiplexer and suffix in ("_Pv", "_Rv"):
+            lines.append(f"    {burst_mux} = (long)_new;")
+        elif signal.has_multiplexer_id:
+            lines.append(f"    {burst_mux} = {signal.multiplexer_id};")
     lines.append(f"    begin_burst_{message_name}(_use_fast);")
     lines.append("  }")
     lines.append("  else")
@@ -1105,6 +1336,12 @@ def _build_can_file(
         out.append(f"  msTimer tmr_{name};")
         if _counter_enabled(msg_cfg, model):
             out.append(f"  long cnt_{name};")
+        if _is_mux_message(model):
+            groups = model.mux.groups
+            groups_literal = ", ".join(str(group) for group in groups)
+            out.append(
+                f"  const long {_mux_groups_var(name)}[{len(groups)}] = {{{groups_literal}}};"
+            )
         exclude = set()
         if msg_cfg.get("has_validation", False):
             for key in ("check_signal", "counter_signal"):
@@ -1135,6 +1372,8 @@ def _build_can_file(
         if model.info and model.info.has_msg_send_type:
             out.append(f"  burst_left_{name} = 0;")
             out.append(f"  burst_fast_{name} = 0;")
+            if _is_mux_message(model):
+                out.append(f"  {_burst_mux_var(name)} = -1;")
             for signal, suffix in _watchable_members(model, exclude):
                 member = f"{signal.name}{suffix}"
                 out.append(f"  {_restore_pending_var(name, member)} = 0;")
@@ -1163,7 +1402,7 @@ def _build_can_file(
             out.extend(_build_finish_burst_function(namespace, name, model, parsed, exclude))
         out.extend(_build_arm_function(namespace, name, parsed))
         out.extend(_build_timer_handler(namespace, name, parsed))
-        out.extend(_build_send_function(namespace, dbc_name, sender_node, name, parsed))
+        out.extend(_build_send_function(namespace, dbc_name, sender_node, name, model, parsed))
         out.extend(
             _build_fill_function(
                 namespace,
@@ -1230,11 +1469,13 @@ def _build_send_function(
     dbc_name: str,
     sender_node: str,
     message_name: str,
+    model: MessageModel,
     parsed: "ParsedSysvar",
 ) -> List[str]:
     info = _info_var(message_name)
     node_info = f"{dbc_name}_Node_Info"
     node_on = f"{dbc_name}_Node_On"
+    msg = _msg_var(message_name)
     lines = [f"void send_{message_name}()", "{"]
     # 节点级总开关（仅当系统变量存在时才生成）
     if node_on in parsed.variable_names:
@@ -1251,8 +1492,29 @@ def _build_send_function(
             f"  if (({send_type_expr} == {MSG_SEND_EVENT} || {send_type_expr} == {MSG_SEND_IF_ACTIVE})"
             f" && burst_left_{message_name} <= 0) return;"
         )
-    lines.append(f"  fill_{message_name}();")
-    lines.append(f"  output({_msg_var(message_name)});")
+
+    if model.mux is not None:
+        burst_mux = _burst_mux_var(message_name)
+        groups_var = _mux_groups_var(message_name)
+        group_count = len(model.mux.groups)
+        if model.info and model.info.has_msg_send_type:
+            lines.append(f"  if (burst_left_{message_name} > 0 && {burst_mux} >= 0)")
+            lines.append("  {")
+            lines.append(f"    fill_{message_name}_group({burst_mux});")
+            lines.append(f"    output({msg});")
+            lines.append("    return;")
+            lines.append("  }")
+        lines.append("  {")
+        lines.append("    long _mux_i;")
+        lines.append(f"    for (_mux_i = 0; _mux_i < {group_count}; _mux_i++)")
+        lines.append("    {")
+        lines.append(f"      fill_{message_name}_group({groups_var}[_mux_i]);")
+        lines.append(f"      output({msg});")
+        lines.append("    }")
+        lines.append("  }")
+    else:
+        lines.append(f"  fill_{message_name}();")
+        lines.append(f"  output({msg});")
     lines.append("}")
     lines.append("")
     return lines
