@@ -14,8 +14,8 @@ CAPL 生成器
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动，并做防抖避免 on sysvar 互相触发死循环。
 - 多路复用报文：周期/CE/CA 发送（含正常周期与 CE/CA 的 E/A burst）均按 multiplexer_id
-  从小到大连续 output 全部子 ID（无 delay）；纯 Event / IfActive burst 仅发送触发信号所属 group；
-  burst 结束后将 Mux 信号 sysvar 恢复为初始值。
+  从小到大连续 output 全部子 ID（无 delay）；纯 Event / IfActive burst 仅发送触发信号所属 group。
+  Mux 开关信号不参与 burst 触发与影子恢复；其报文值由 fill_group(mux_id) 驱动，与用户 sysvar 赋值互不干扰。
   多路复用元数据全部来自 .vsysvar（_is_multiplexed / _is_multiplexer / _multiplexer_id），生成期写死。
 """
 from __future__ import annotations
@@ -931,15 +931,20 @@ def _capl_member_type(signal: SignalModel, suffix: str) -> str:
     return "long"
 
 
+def _is_mux_switch_signal(model: MessageModel, signal: SignalModel) -> bool:
+    """多路复用报文中的 Mux 开关信号（如 Child_ID_32B_S），不作为普通数据信号处理。"""
+    return model.mux is not None and signal.name == model.mux.mux_signal_name
+
+
 def _watchable_members(
     model: MessageModel,
     exclude: Optional[set] = None,
 ) -> List[Tuple[SignalModel, str]]:
-    """返回需要监听变化的 (信号, 后缀) 列表。"""
+    """返回需要监听变化的 (信号, 后缀) 列表（不含 Mux 开关信号）。"""
     exclude = exclude or set()
     items: List[Tuple[SignalModel, str]] = []
     for signal in model.signals:
-        if signal.name in exclude:
+        if signal.name in exclude or _is_mux_switch_signal(model, signal):
             continue
         for suffix in _WATCHABLE_SUFFIXES:
             member = f"{signal.name}{suffix}"
@@ -1035,8 +1040,6 @@ def _build_finish_burst_function(
         lines.append("  }")
     lines.append(f"  burst_fast_{message_name} = 0;")
     if model.mux is not None:
-        mux_sv = _mux_sysvar_member(namespace, message_name, model.mux)
-        lines.append(f"  {mux_sv} = {model.mux.initial_value};")
         lines.append(f"  {_burst_mux_var(message_name)} = -1;")
     lines.append(f"  if ({send_type_expr} == {MSG_SEND_EVENT} || {send_type_expr} == {MSG_SEND_IF_ACTIVE})")
     lines.append("    return;")
@@ -1151,7 +1154,7 @@ def _append_burst_trigger_lines(
     lines.append(f"    {_restore_pending_var(message_name, member)} = 1;")
     lines.append(f"    {_restore_var(message_name, member)} = _old;")
     lines.append(f"    {shadow} = _new;")
-    if model.mux is not None:
+    if model.mux is not None and signal.has_multiplexer_id:
         burst_mux = _burst_mux_var(message_name)
         # 仅纯 Event / IfActive burst 设置单 group；CE/CA 的 E/A burst 在 send 中按全子 ID 发送。
         lines.append(
@@ -1159,10 +1162,7 @@ def _append_burst_trigger_lines(
             f" || {send_type_expr} == {MSG_SEND_IF_ACTIVE})"
         )
         lines.append("    {")
-        if signal.is_multiplexer and suffix in ("_Pv", "_Rv"):
-            lines.append(f"      {burst_mux} = (long)_new;")
-        elif signal.has_multiplexer_id:
-            lines.append(f"      {burst_mux} = {signal.multiplexer_id};")
+        lines.append(f"      {burst_mux} = {signal.multiplexer_id};")
         lines.append("    }")
     lines.append(f"    begin_burst_{message_name}(_use_fast);")
     lines.append("  }")
@@ -1239,7 +1239,7 @@ def _build_merged_sysvar_handlers(
     lines: List[str] = []
 
     for signal in model.signals:
-        if signal.name in exclude:
+        if signal.name in exclude or _is_mux_switch_signal(model, signal):
             continue
 
         linkage_ok = signal.has_pv and signal.has_rv and _linkage_factor_ok(signal)

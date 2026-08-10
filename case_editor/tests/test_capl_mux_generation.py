@@ -90,7 +90,8 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn(f"== {MSG_SEND_CE}", content)
         self.assertIn(f"== {MSG_SEND_CA}", content)
         self.assertIn("burst_left_Media_0x32B > 0", content)
-        self.assertIn("@media::Media_0x32B.Child_ID_32B_S_Pv = 0;", content)
+        self.assertNotIn("g_prev_Media_0x32B_Child_ID_32B_S_Pv", content)
+        self.assertNotIn("@media::Media_0x32B.Child_ID_32B_S_Pv = 0;", content)
 
 
     def test_fill_group_merges_same_mux_id(self) -> None:
