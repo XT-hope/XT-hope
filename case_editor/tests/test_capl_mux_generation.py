@@ -7,6 +7,7 @@ from case_editor.src.capl_generation import (
     MSG_SEND_CE,
     MSG_SEND_EVENT,
     MSG_SEND_IF_ACTIVE,
+    SignalModel,
     _build_can_file,
     parse_vsysvar,
 )
@@ -90,6 +91,35 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn(f"== {MSG_SEND_CA}", content)
         self.assertIn("burst_left_Media_0x32B > 0", content)
         self.assertIn("@media::Media_0x32B.Child_ID_32B_S_Pv = 0;", content)
+
+
+    def test_fill_group_merges_same_mux_id(self) -> None:
+        with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
+            fh.write(MUX_VSYSVAR)
+            path = fh.name
+
+        parsed = parse_vsysvar(path)
+        model = parsed.messages["Media_0x32B"]
+        # 模拟第二个同 group 信号
+        extra = model.signal_index["CSW_Enable_S"]
+        clone = SignalModel(
+            name="Other_S",
+            has_pv=True,
+            has_multiplexer_id=True,
+            multiplexer_id=14,
+        )
+        model.signals.append(clone)
+        model.signal_index["Other_S"] = clone
+
+        from case_editor.src.capl_generation import _build_fill_group_function
+
+        lines = _build_fill_group_function(
+            "media", model.name, model, parsed, False, "", "", "crc16", {}
+        )
+        content = "\n".join(lines)
+        self.assertEqual(content.count("if (mux_id == 14)"), 1)
+        self.assertIn("CSW_Enable_S", content)
+        self.assertIn("Other_S", content)
 
 
 if __name__ == "__main__":

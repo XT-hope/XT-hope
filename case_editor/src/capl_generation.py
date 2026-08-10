@@ -813,19 +813,23 @@ def _build_fill_body_lines(
     if mux is not None and mux_id_expr is not None:
         lines.append(_build_mux_signal_assignment(message_name, mux, mux_id_expr))
 
+    grouped_mux_signals: Dict[int, List[SignalModel]] = {}
     for signal in model.signals:
         if mux is not None and signal.name == mux.mux_signal_name:
             continue
         if signal.name in (counter_signal, check_signal):
             continue
-        assignment = _build_signal_assignment(namespace, message_name, signal)
         if mux is not None and mux_id_expr is not None and signal.has_multiplexer_id:
-            lines.append(f"  if (mux_id == {signal.multiplexer_id})")
-            lines.append("  {")
-            lines.extend(f"  {line}" for line in assignment)
-            lines.append("  }")
-        else:
-            lines.extend(assignment)
+            grouped_mux_signals.setdefault(signal.multiplexer_id, []).append(signal)
+            continue
+        lines.extend(_build_signal_assignment(namespace, message_name, signal))
+
+    for mux_id in sorted(grouped_mux_signals):
+        lines.append(f"  if (mux_id == {mux_id})")
+        lines.append("  {")
+        for signal in grouped_mux_signals[mux_id]:
+            lines.extend(f"  {line}" for line in _build_signal_assignment(namespace, message_name, signal))
+        lines.append("  }")
 
     if has_counter:
         counter = model.get(counter_signal)
