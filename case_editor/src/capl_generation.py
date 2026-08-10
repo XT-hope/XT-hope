@@ -13,8 +13,9 @@ CAPL 生成器
 - 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；报文对象 msg.信号 赋物理值。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动，并做防抖避免 on sysvar 互相触发死循环。
-- 多路复用报文：周期/CE/CA 正常周期发送按 multiplexer_id 从小到大连续 output（无 delay）；
-  Event/CE/CA 快周期 burst 仅发送触发信号所属 group；burst 结束后将 Mux 信号 sysvar 恢复为初始值。
+- 多路复用报文：周期/CE/CA 发送（含正常周期与 CE/CA 的 E/A burst）均按 multiplexer_id
+  从小到大连续 output 全部子 ID（无 delay）；纯 Event / IfActive burst 仅发送触发信号所属 group；
+  burst 结束后将 Mux 信号 sysvar 恢复为初始值。
   多路复用元数据全部来自 .vsysvar（_is_multiplexed / _is_multiplexer / _multiplexer_id），生成期写死。
 """
 from __future__ import annotations
@@ -1148,10 +1149,17 @@ def _append_burst_trigger_lines(
     lines.append(f"    {shadow} = _new;")
     if model.mux is not None:
         burst_mux = _burst_mux_var(message_name)
+        # 仅纯 Event / IfActive burst 设置单 group；CE/CA 的 E/A burst 在 send 中按全子 ID 发送。
+        lines.append(
+            f"    if ({send_type_expr} == {MSG_SEND_EVENT}"
+            f" || {send_type_expr} == {MSG_SEND_IF_ACTIVE})"
+        )
+        lines.append("    {")
         if signal.is_multiplexer and suffix in ("_Pv", "_Rv"):
-            lines.append(f"    {burst_mux} = (long)_new;")
+            lines.append(f"      {burst_mux} = (long)_new;")
         elif signal.has_multiplexer_id:
-            lines.append(f"    {burst_mux} = {signal.multiplexer_id};")
+            lines.append(f"      {burst_mux} = {signal.multiplexer_id};")
+        lines.append("    }")
     lines.append(f"    begin_burst_{message_name}(_use_fast);")
     lines.append("  }")
     lines.append("  else")
@@ -1464,6 +1472,26 @@ def _build_timer_handler(namespace: str, message_name: str, parsed: ParsedSysvar
     ]
 
 
+def _append_mux_send_all_groups_lines(
+    lines: List[str],
+    message_name: str,
+    model: MessageModel,
+    indent: str = "  ",
+) -> None:
+    """生成按全部 multiplexer_id 连续 output 的 CAPL 代码块。"""
+    msg = _msg_var(message_name)
+    groups_var = _mux_groups_var(message_name)
+    group_count = len(model.mux.groups)
+    lines.append(f"{indent}{{")
+    lines.append(f"{indent}  long _mux_i;")
+    lines.append(f"{indent}  for (_mux_i = 0; _mux_i < {group_count}; _mux_i++)")
+    lines.append(f"{indent}  {{")
+    lines.append(f"{indent}    fill_{message_name}_group({groups_var}[_mux_i]);")
+    lines.append(f"{indent}    output({msg});")
+    lines.append(f"{indent}  }}")
+    lines.append(f"{indent}}}")
+
+
 def _build_send_function(
     namespace: str,
     dbc_name: str,
@@ -1495,23 +1523,26 @@ def _build_send_function(
 
     if model.mux is not None:
         burst_mux = _burst_mux_var(message_name)
-        groups_var = _mux_groups_var(message_name)
-        group_count = len(model.mux.groups)
         if model.info and model.info.has_msg_send_type:
+            send_type_for_burst = _info_sysvar(
+                namespace, message_name, "_MsgSendType", parsed, str(MSG_SEND_CYCLE)
+            )
+            lines.append(f"  if (burst_left_{message_name} > 0)")
+            lines.append("  {")
+            lines.append(
+                f"    if ({send_type_for_burst} == {MSG_SEND_CE}"
+                f" || {send_type_for_burst} == {MSG_SEND_CA})"
+            )
+            _append_mux_send_all_groups_lines(lines, message_name, model, indent="    ")
+            lines.append("    return;")
+            lines.append("  }")
             lines.append(f"  if (burst_left_{message_name} > 0 && {burst_mux} >= 0)")
             lines.append("  {")
             lines.append(f"    fill_{message_name}_group({burst_mux});")
             lines.append(f"    output({msg});")
             lines.append("    return;")
             lines.append("  }")
-        lines.append("  {")
-        lines.append("    long _mux_i;")
-        lines.append(f"    for (_mux_i = 0; _mux_i < {group_count}; _mux_i++)")
-        lines.append("    {")
-        lines.append(f"      fill_{message_name}_group({groups_var}[_mux_i]);")
-        lines.append(f"      output({msg});")
-        lines.append("    }")
-        lines.append("  }")
+        _append_mux_send_all_groups_lines(lines, message_name, model)
     else:
         lines.append(f"  fill_{message_name}();")
         lines.append(f"  output({msg});")

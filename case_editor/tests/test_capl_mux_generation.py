@@ -3,6 +3,10 @@ import unittest
 from pathlib import Path
 
 from case_editor.src.capl_generation import (
+    MSG_SEND_CA,
+    MSG_SEND_CE,
+    MSG_SEND_EVENT,
+    MSG_SEND_IF_ACTIVE,
     _build_can_file,
     parse_vsysvar,
 )
@@ -79,7 +83,12 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn("for (_mux_i = 0; _mux_i < 1; _mux_i++)", content)
         self.assertIn("fill_Media_0x32B_group(g_mux_groups_Media_0x32B[_mux_i]);", content)
         self.assertIn("if (mux_id == 14)", content)
+        self.assertIn(f"== {MSG_SEND_EVENT}", content)
+        self.assertIn(f"== {MSG_SEND_IF_ACTIVE}", content)
         self.assertIn("burst_mux_Media_0x32B = 14;", content)
+        self.assertIn(f"== {MSG_SEND_CE}", content)
+        self.assertIn(f"== {MSG_SEND_CA}", content)
+        self.assertIn("burst_left_Media_0x32B > 0", content)
         self.assertIn("@media::Media_0x32B.Child_ID_32B_S_Pv = 0;", content)
 
 
