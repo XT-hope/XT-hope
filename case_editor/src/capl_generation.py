@@ -647,10 +647,6 @@ def _burst_mux_var(message_name: str) -> str:
     return f"burst_mux_{message_name}"
 
 
-def _mux_groups_var(message_name: str) -> str:
-    return f"g_mux_groups_{message_name}"
-
-
 def _is_mux_message(model: MessageModel) -> bool:
     return model.mux is not None
 
@@ -1348,12 +1344,6 @@ def _build_can_file(
         out.append(f"  msTimer tmr_{name};")
         if _counter_enabled(msg_cfg, model):
             out.append(f"  long cnt_{name};")
-        if _is_mux_message(model):
-            groups = model.mux.groups
-            groups_literal = ", ".join(str(group) for group in groups)
-            out.append(
-                f"  const long {_mux_groups_var(name)}[{len(groups)}] = {{{groups_literal}}};"
-            )
         exclude = set()
         if msg_cfg.get("has_validation", False):
             for key in ("check_signal", "counter_signal"):
@@ -1482,17 +1472,15 @@ def _append_mux_send_all_groups_lines(
     model: MessageModel,
     indent: str = "  ",
 ) -> None:
-    """生成按全部 multiplexer_id 连续 output 的 CAPL 代码块。"""
+    """生成按全部 multiplexer_id 连续 output 的 CAPL 代码块。
+
+    生成期展开各 group，避免 CAPL 对 ``const long arr[] = {..}`` 初始化语法的兼容问题。
+    """
     msg = _msg_var(message_name)
-    groups_var = _mux_groups_var(message_name)
-    group_count = len(model.mux.groups)
     lines.append(f"{indent}{{")
-    lines.append(f"{indent}  long _mux_i;")
-    lines.append(f"{indent}  for (_mux_i = 0; _mux_i < {group_count}; _mux_i++)")
-    lines.append(f"{indent}  {{")
-    lines.append(f"{indent}    fill_{message_name}_group({groups_var}[_mux_i]);")
-    lines.append(f"{indent}    output({msg});")
-    lines.append(f"{indent}  }}")
+    for mux_id in model.mux.groups:
+        lines.append(f"{indent}  fill_{message_name}_group({mux_id});")
+        lines.append(f"{indent}  output({msg});")
     lines.append(f"{indent}}}")
 
 

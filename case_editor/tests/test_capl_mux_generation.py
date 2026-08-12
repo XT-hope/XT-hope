@@ -80,9 +80,10 @@ class CaplMuxGenerationTest(unittest.TestCase):
         content = _build_can_file("media", "Media", 1, [(msg_cfg, model)], parsed, {model.name: 0x32B})
 
         self.assertIn("fill_Media_0x32B_group(long mux_id)", content)
-        self.assertIn("g_mux_groups_Media_0x32B[1] = {14};", content)
-        self.assertIn("for (_mux_i = 0; _mux_i < 1; _mux_i++)", content)
-        self.assertIn("fill_Media_0x32B_group(g_mux_groups_Media_0x32B[_mux_i]);", content)
+        self.assertNotIn("g_mux_groups_", content)
+        self.assertNotIn("const long", content)
+        self.assertIn("fill_Media_0x32B_group(14);", content)
+        self.assertIn("output(msg_Media_0x32B);", content)
         self.assertIn("if (mux_id == 14)", content)
         self.assertIn(f"== {MSG_SEND_EVENT}", content)
         self.assertIn(f"== {MSG_SEND_IF_ACTIVE}", content)
