@@ -166,6 +166,59 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn("long burst_fast_Media_0x32B;", content)
         self.assertNotIn("burst_mux_Media_0x32B", content)
         self.assertNotIn("g_prev_Media_0x32B_", content)
+        self.assertNotIn("finish_burst_Media_0x32B", content)
+        self.assertNotIn("begin_burst_Media_0x32B", content)
+
+    def test_sysvar_quiet_blocks_restore_and_linkage_retrigger(self) -> None:
+        with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
+            fh.write(MUX_VSYSVAR)
+            path = fh.name
+
+        parsed = parse_vsysvar(path)
+        model = parsed.messages["Media_0x32B"]
+        msg_cfg = {"message_name": "Media_0x32B", "has_validation": False}
+        content = _build_can_file("media", "Media", 1, [(msg_cfg, model)], parsed, {model.name: 0x32B})
+
+        self.assertIn("long g_sv_quiet_Media_0x32B;", content)
+        self.assertIn("if (g_sv_quiet_Media_0x32B != 0)", content)
+        self.assertIn("g_sv_quiet_Media_0x32B = g_sv_quiet_Media_0x32B + 1;", content)
+        self.assertIn("@media::Media_0x32B.CSW_Enable_S_Rv = _newRv;", content)
+        finish_idx = content.index("void finish_burst_Media_0x32B()")
+        restore_block = content[finish_idx : finish_idx + 800]
+        shadow_idx = restore_block.index("g_prev_Media_0x32B_CSW_Enable_S_Pv")
+        sv_idx = restore_block.index("@media::Media_0x32B.CSW_Enable_S_Pv =")
+        self.assertLess(shadow_idx, sv_idx)
+        self.assertIn("g_sv_quiet_Media_0x32B = g_sv_quiet_Media_0x32B + 1;", restore_block)
+
+    def test_ca_trigger_requires_non_cycle_and_not_inactive(self) -> None:
+        vsysvar = MUX_VSYSVAR.replace(
+            'Media_0x32B_MsgSendType" type="int" startValue="0"',
+            'Media_0x32B_MsgSendType" type="int" startValue="4"',
+            1,
+        ).replace(
+            '<structMember name="CSW_Enable_S_SigSendType" type="int" startValue="0" bitcount="32" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>',
+            '''<structMember name="CSW_Enable_S_SigSendType" type="int" startValue="2" bitcount="32" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment="">
+          <valuetable name="CSW_Enable_S_SigSendTypeVt">
+            <valuetableentry value="0" description="Cycle"/>
+            <valuetableentry value="1" description="OnWrite"/>
+            <valuetableentry value="2" description="OnChange"/>
+            <valuetableentry value="3" description="Event"/>
+          </valuetable>
+        </structMember>
+        <structMember name="CSW_Enable_S_inactive_value" type="int" startValue="0" bitcount="32" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>''',
+            1,
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
+            fh.write(vsysvar)
+            path = fh.name
+
+        parsed = parse_vsysvar(path)
+        model = parsed.messages["Media_0x32B"]
+        msg_cfg = {"message_name": "Media_0x32B", "has_validation": False}
+        content = _build_can_file("media", "Media", 1, [(msg_cfg, model)], parsed, {model.name: 0x32B})
+        self.assertIn("== 4 && @media::Media_0x32B.CSW_Enable_S_SigSendType != 0", content)
+        self.assertIn("_old != _new", content)
+        self.assertIn("_new != (@media::Media_0x32B.CSW_Enable_S_inactive_value)", content)
 
     def test_fill_group_merges_same_mux_id(self) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
