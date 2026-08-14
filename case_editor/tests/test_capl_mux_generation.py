@@ -94,6 +94,30 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertNotIn("g_prev_Media_0x32B_Child_ID_32B_S_Pv", content)
         self.assertNotIn("@media::Media_0x32B.Child_ID_32B_S_Pv = 0;", content)
 
+    def test_event_burst_send_uses_burst_mux_not_dead_code(self) -> None:
+        vsysvar = MUX_VSYSVAR.replace(
+            'Media_0x32B_MsgSendType" type="int" startValue="0"',
+            'Media_0x32B_MsgSendType" type="int" startValue="1"',
+            1,
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
+            fh.write(vsysvar)
+            path = fh.name
+
+        parsed = parse_vsysvar(path)
+        model = parsed.messages["Media_0x32B"]
+        from case_editor.src.capl_generation import _build_send_function
+
+        send_body = "\n".join(
+            _build_send_function("Control", "Control", "Media", model.name, model, parsed)
+        )
+        # Event burst: burst_mux 单 group 发送必须在 burst_left 块内，且 CE/CA 的 return 不能 unconditional
+        self.assertIn("if (burst_mux_Media_0x32B >= 0)", send_body)
+        self.assertIn("fill_Media_0x32B_group(burst_mux_Media_0x32B);", send_body)
+        self.assertNotIn(
+            "    return;\n  }\n  if (burst_left_Media_0x32B > 0 && burst_mux_Media_0x32B >= 0)",
+            send_body,
+        )
 
     def test_fill_group_merges_same_mux_id(self) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
@@ -102,8 +126,6 @@ class CaplMuxGenerationTest(unittest.TestCase):
 
         parsed = parse_vsysvar(path)
         model = parsed.messages["Media_0x32B"]
-        # 模拟第二个同 group 信号
-        extra = model.signal_index["CSW_Enable_S"]
         clone = SignalModel(
             name="Other_S",
             has_pv=True,
