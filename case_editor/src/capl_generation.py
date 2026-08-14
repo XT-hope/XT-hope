@@ -10,6 +10,7 @@ CAPL 生成器
 - CAN 通道号从项目的 project.json -> canoe.dbc_files 读取（channel 为 0 基，实际通道 = channel + 1）。
 - 每个报文按系统变量进行模拟发送，支持 MsgSendType：
     Cycle / Event / IfActive / CE / CA（数值与 DBC GenMsgSendType 一致：0~4）。
+    若 .vsysvar 中没有 {Msg}_MsgSendType，按 Cycle 周期发送（_MsgCycleTime，缺省 10ms）。
 - 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；报文对象 msg.信号 赋物理值。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
@@ -1081,8 +1082,12 @@ def _linkage_factor_ok(signal: SignalModel) -> bool:
         return False
 
 
-def _has_burst_triggers(model: MessageModel) -> bool:
+def _has_msg_send_type(model: MessageModel) -> bool:
     return model.info is not None and model.info.has_msg_send_type
+
+
+def _has_burst_triggers(model: MessageModel) -> bool:
+    return _has_msg_send_type(model)
 
 
 def _append_burst_trigger_decls(
@@ -1399,7 +1404,7 @@ def _build_can_file(
                     exclude.add(sig)
         if _message_needs_quiet(model, exclude):
             out.append(f"  long {_quiet_var(name)};")
-        if model.info and model.info.has_msg_send_type:
+        if _has_msg_send_type(model):
             out.extend(_build_burst_variables(name, model, exclude))
     out.append("}")
     out.append("")
@@ -1424,14 +1429,15 @@ def _build_can_file(
         out.append(f"  burst_fast_{name} = 0;")
         if _message_needs_quiet(model, exclude):
             out.append(f"  {_quiet_var(name)} = 0;")
-        if model.info and model.info.has_msg_send_type:
+        if _has_msg_send_type(model):
             if _is_mux_message(model):
                 out.append(f"  {_burst_mux_var(name)} = -1;")
             for signal, suffix in _watchable_members(model, exclude):
                 member = f"{signal.name}{suffix}"
                 out.append(f"  {_restore_pending_var(name, member)} = 0;")
             out.extend(_build_init_shadows(namespace, name, model, exclude))
-        if model.info and model.info.has_msg_send_type:
+        # 无 MsgSendType 时按 Cycle：启动即装载周期定时器。
+        if _has_msg_send_type(model):
             out.append(f"  if ({_info_sysvar(namespace, name, '_MsgSendType', parsed, str(MSG_SEND_CYCLE))} != {MSG_SEND_EVENT}"
                        f" && {_info_sysvar(namespace, name, '_MsgSendType', parsed, str(MSG_SEND_CYCLE))} != {MSG_SEND_IF_ACTIVE})")
             out.append(f"    arm_{name}();")
@@ -1449,16 +1455,16 @@ def _build_can_file(
                 sig = msg_cfg.get(key, "")
                 if sig:
                     exclude.add(sig)
-        if model.info and model.info.has_msg_send_type:
+        if _has_msg_send_type(model):
             out.extend(_build_begin_burst_function(namespace, name, parsed))
             out.extend(_build_finish_burst_function(namespace, name, model, parsed, exclude))
-        out.extend(_build_arm_function(namespace, name, parsed))
+        out.extend(_build_arm_function(namespace, name, parsed, has_msg_send_type=_has_msg_send_type(model)))
         out.extend(
             _build_timer_handler(
                 namespace,
                 name,
                 parsed,
-                has_burst_funcs=bool(model.info and model.info.has_msg_send_type),
+                has_burst_funcs=_has_msg_send_type(model),
             )
         )
         out.extend(_build_send_function(namespace, dbc_name, sender_node, name, model, parsed))
@@ -1480,8 +1486,25 @@ def _build_can_file(
     return "\n".join(out) + "\n"
 
 
-def _build_arm_function(namespace: str, message_name: str, parsed: ParsedSysvar) -> List[str]:
+def _build_arm_function(
+    namespace: str,
+    message_name: str,
+    parsed: ParsedSysvar,
+    has_msg_send_type: bool = True,
+) -> List[str]:
     cycle_expr = _info_sysvar(namespace, message_name, "_MsgCycleTime", parsed, "10")
+    if not has_msg_send_type:
+        return [
+            f"void arm_{message_name}()",
+            "{",
+            "  long _ct;",
+            f"  _ct = {cycle_expr};",
+            "  if (_ct <= 0)",
+            "    _ct = 10;",
+            f"  setTimer(tmr_{message_name}, _ct);",
+            "}",
+            "",
+        ]
     fast_expr = _info_sysvar(namespace, message_name, "_MsgCycleTimeFast", parsed, cycle_expr)
     send_type_expr = _info_sysvar(namespace, message_name, "_MsgSendType", parsed, str(MSG_SEND_CYCLE))
     return [
@@ -1578,15 +1601,16 @@ def _build_send_function(
     if info in parsed.variable_names:
         lines.append(f"  if ({_sysvar(namespace, info, message_name + '_MsgOn')} != 1) return;")
         lines.append(f"  if ({_sysvar(namespace, info, message_name + '_MsgOff')} == 1) return;")
-        send_type_expr = _info_sysvar(namespace, message_name, "_MsgSendType", parsed, str(MSG_SEND_CYCLE))
-        lines.append(
-            f"  if (({send_type_expr} == {MSG_SEND_EVENT} || {send_type_expr} == {MSG_SEND_IF_ACTIVE})"
-            f" && burst_left_{message_name} <= 0) return;"
-        )
+        if _has_msg_send_type(model):
+            send_type_expr = _info_sysvar(namespace, message_name, "_MsgSendType", parsed, str(MSG_SEND_CYCLE))
+            lines.append(
+                f"  if (({send_type_expr} == {MSG_SEND_EVENT} || {send_type_expr} == {MSG_SEND_IF_ACTIVE})"
+                f" && burst_left_{message_name} <= 0) return;"
+            )
 
     if model.mux is not None:
         burst_mux = _burst_mux_var(message_name)
-        if model.info and model.info.has_msg_send_type:
+        if _has_msg_send_type(model):
             send_type_for_burst = _info_sysvar(
                 namespace, message_name, "_MsgSendType", parsed, str(MSG_SEND_CYCLE)
             )

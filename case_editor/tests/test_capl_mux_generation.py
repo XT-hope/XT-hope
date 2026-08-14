@@ -168,6 +168,14 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertNotIn("g_prev_Media_0x32B_", content)
         self.assertNotIn("finish_burst_Media_0x32B", content)
         self.assertNotIn("begin_burst_Media_0x32B", content)
+        # 无 MsgSendType：按 Cycle 启动周期定时器，timer 只 send+arm
+        self.assertIn("  arm_Media_0x32B();", content)
+        self.assertIn(
+            "on timer tmr_Media_0x32B\n{\n  send_Media_0x32B();\n  arm_Media_0x32B();\n}",
+            content,
+        )
+        self.assertIn("  _ct = @media::Media_0x32B_Info.Media_0x32B_MsgCycleTime;", content)
+        self.assertNotIn("burst_left_Media_0x32B <= 0) return;", content)
 
     def test_sysvar_quiet_blocks_restore_and_linkage_retrigger(self) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
