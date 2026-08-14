@@ -688,7 +688,7 @@ def _build_fill_function(
 ) -> List[str]:
     """生成填充报文函数。多路复用报文生成 fill_{msg}_group(long mux_id)。"""
     if _is_mux_message(model):
-        return _build_fill_group_function(
+        lines = _build_fill_group_function(
             namespace,
             message_name,
             model,
@@ -699,6 +699,8 @@ def _build_fill_function(
             check_method,
             check_parameters,
         )
+        lines.extend(_build_mux_output_all_groups_function(message_name, model))
+        return lines
     return _build_fill_plain_function(
         namespace,
         message_name,
@@ -1593,22 +1595,49 @@ def _build_timer_handler(
     ]
 
 
+def _mux_ids_initializer(model: MessageModel) -> str:
+    """生成 CAPL 数组初值，如 ``1, 14, 3``。"""
+    if model.mux is None:
+        return ""
+    return ", ".join(str(mux_id) for mux_id in model.mux.groups)
+
+
+def _build_mux_output_all_groups_function(
+    message_name: str,
+    model: MessageModel,
+) -> List[str]:
+    """生成按全部 multiplexer_id 连续 fill+output 的 CAPL 函数。
+
+    使用非 const 的 ``long mux_ids[] = {..}``；CAPL 支持该初始化，但不能加 ``const``。
+    单独成函数，以便局部变量写在函数开头，且 send 内两处调用不必重复声明。
+    """
+    if model.mux is None:
+        raise ValueError(f"{message_name} 不是多路复用报文，无法生成 output_all_*_groups")
+    msg = _msg_var(message_name)
+    n = len(model.mux.groups)
+    mux_ids = _mux_ids_initializer(model)
+    return [
+        f"void output_all_{message_name}_groups()",
+        "{",
+        f"  long mux_ids[] = {{{mux_ids}}};",
+        "  long i;",
+        f"  for (i = 0; i < {n}; i++)",
+        "  {",
+        f"    fill_{message_name}_group(mux_ids[i]);",
+        f"    output({msg});",
+        "  }",
+        "}",
+        "",
+    ]
+
+
 def _append_mux_send_all_groups_lines(
     lines: List[str],
     message_name: str,
-    model: MessageModel,
     indent: str = "  ",
 ) -> None:
-    """生成按全部 multiplexer_id 连续 output 的 CAPL 代码块。
-
-    生成期展开各 group，避免 CAPL 对 ``const long arr[] = {..}`` 初始化语法的兼容问题。
-    """
-    msg = _msg_var(message_name)
-    lines.append(f"{indent}{{")
-    for mux_id in model.mux.groups:
-        lines.append(f"{indent}  fill_{message_name}_group({mux_id});")
-        lines.append(f"{indent}  output({msg});")
-    lines.append(f"{indent}}}")
+    """在 send 函数中调用 ``output_all_{msg}_groups()``。"""
+    lines.append(f"{indent}output_all_{message_name}_groups();")
 
 
 def _build_send_function(
@@ -1654,7 +1683,7 @@ def _build_send_function(
                 f" || {send_type_for_burst} == {MSG_SEND_CA})"
             )
             lines.append("    {")
-            _append_mux_send_all_groups_lines(lines, message_name, model, indent="      ")
+            _append_mux_send_all_groups_lines(lines, message_name, indent="      ")
             lines.append("      return;")
             lines.append("    }")
             lines.append(f"    if ({burst_mux} >= 0)")
@@ -1665,7 +1694,7 @@ def _build_send_function(
             lines.append("    }")
             lines.append("    return;")
             lines.append("  }")
-        _append_mux_send_all_groups_lines(lines, message_name, model)
+        _append_mux_send_all_groups_lines(lines, message_name)
     else:
         lines.append(f"  fill_{message_name}();")
         lines.append(f"  output({msg});")

@@ -82,7 +82,11 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn("fill_Media_0x32B_group(long mux_id)", content)
         self.assertNotIn("g_mux_groups_", content)
         self.assertNotIn("const long", content)
-        self.assertIn("fill_Media_0x32B_group(14);", content)
+        self.assertIn("void output_all_Media_0x32B_groups()", content)
+        self.assertIn("long mux_ids[] = {14};", content)
+        self.assertIn("fill_Media_0x32B_group(mux_ids[i]);", content)
+        self.assertIn("output_all_Media_0x32B_groups();", content)
+        self.assertNotIn("fill_Media_0x32B_group(14);", content)
         self.assertIn("output(msg_Media_0x32B);", content)
         self.assertIn("if (mux_id == 14)", content)
         self.assertIn(f"== {MSG_SEND_EVENT}", content)
@@ -288,6 +292,32 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertEqual(content.count("if (mux_id == 14)"), 1)
         self.assertIn("CSW_Enable_S", content)
         self.assertIn("Other_S", content)
+
+    def test_output_all_groups_uses_nonconst_array_for_multiple_ids(self) -> None:
+        from case_editor.src.capl_generation import (
+            MessageModel,
+            MuxMetadata,
+            _build_mux_output_all_groups_function,
+        )
+
+        mux_signal = SignalModel(name="Mux_S", is_multiplexer=True)
+        model = MessageModel(
+            name="Msg_A",
+            mux=MuxMetadata(
+                mux_signal_name="Mux_S",
+                mux_signal=mux_signal,
+                groups=[1, 14, 3, 12, 13],
+                initial_value="0",
+            ),
+        )
+        content = "\n".join(_build_mux_output_all_groups_function("Msg_A", model))
+        self.assertIn("void output_all_Msg_A_groups()", content)
+        self.assertIn("long mux_ids[] = {1, 14, 3, 12, 13};", content)
+        self.assertNotIn("const long", content)
+        self.assertIn("for (i = 0; i < 5; i++)", content)
+        self.assertIn("fill_Msg_A_group(mux_ids[i]);", content)
+        self.assertIn("output(msg_Msg_A);", content)
+        self.assertNotIn("fill_Msg_A_group(1);", content)
 
 
 if __name__ == "__main__":
