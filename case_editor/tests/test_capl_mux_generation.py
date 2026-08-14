@@ -226,7 +226,42 @@ class CaplMuxGenerationTest(unittest.TestCase):
         content = _build_can_file("media", "Media", 1, [(msg_cfg, model)], parsed, {model.name: 0x32B})
         self.assertIn("== 4 && @media::Media_0x32B.CSW_Enable_S_SigSendType != 0", content)
         self.assertIn("_old != _new", content)
-        self.assertIn("_new != (@media::Media_0x32B.CSW_Enable_S_inactive_value)", content)
+        self.assertIn(
+            "@media::Media_0x32B.CSW_Enable_S_has_inactive_value == 1 && "
+            "_new != (@media::Media_0x32B.CSW_Enable_S_inactive_value)",
+            content,
+        )
+
+    def test_if_active_triggers_on_both_inactive_edges(self) -> None:
+        vsysvar = MUX_VSYSVAR.replace(
+            'Media_0x32B_MsgSendType" type="int" startValue="0"',
+            'Media_0x32B_MsgSendType" type="int" startValue="2"',
+            1,
+        ).replace(
+            'CSW_Enable_S_has_inactive_value" type="int" startValue="0"',
+            'CSW_Enable_S_has_inactive_value" type="int" startValue="1"',
+            1,
+        ).replace(
+            '<structMember name="CSW_Enable_S_use_inactive_value"',
+            '''<structMember name="CSW_Enable_S_inactive_value" type="int" startValue="0" bitcount="32" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>
+        <structMember name="CSW_Enable_S_use_inactive_value"''',
+            1,
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
+            fh.write(vsysvar)
+            path = fh.name
+
+        parsed = parse_vsysvar(path)
+        model = parsed.messages["Media_0x32B"]
+        self.assertTrue(model.get("CSW_Enable_S").has_inactive_value)
+        self.assertTrue(model.get("CSW_Enable_S").has_inactive_flag_member)
+        msg_cfg = {"message_name": "Media_0x32B", "has_validation": False}
+        content = _build_can_file("media", "Media", 1, [(msg_cfg, model)], parsed, {model.name: 0x32B})
+        inactive = "@media::Media_0x32B.CSW_Enable_S_inactive_value"
+        self.assertIn(f"== {MSG_SEND_IF_ACTIVE}", content)
+        self.assertIn("@media::Media_0x32B.CSW_Enable_S_has_inactive_value == 1", content)
+        self.assertIn(f"(_old == ({inactive}) && _new != ({inactive}))", content)
+        self.assertIn(f"(_old != ({inactive}) && _new == ({inactive}))", content)
 
     def test_fill_group_merges_same_mux_id(self) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:

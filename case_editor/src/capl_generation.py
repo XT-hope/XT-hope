@@ -11,6 +11,7 @@ CAPL 生成器
 - 每个报文按系统变量进行模拟发送，支持 MsgSendType：
     Cycle / Event / IfActive / CE / CA（数值与 DBC GenMsgSendType 一致：0~4）。
     若 .vsysvar 中没有 {Msg}_MsgSendType，按 Cycle 周期发送（_MsgCycleTime，缺省 10ms）。
+    IfActive：在 {Sig}_has_inactive_value==1 时，Pv/Rv 跨越 inactive（进入或离开）都触发 burst。
 - 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；报文对象 msg.信号 赋物理值。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
@@ -88,7 +89,8 @@ class SignalModel:
     pv_start: Optional[str] = None
     rv_start: Optional[str] = None
     has_special_value: bool = False
-    has_inactive_value: bool = False  # 用于 IfActive/CA 判定，不参与赋值
+    has_inactive_value: bool = False  # 存在 {Sig}_inactive_value 成员
+    has_inactive_flag_member: bool = False  # 存在 {Sig}_has_inactive_value 成员
     inactive_raw: Optional[str] = None
     has_pv: bool = False
     has_rv: bool = False
@@ -380,6 +382,8 @@ def _apply_member(signal: SignalModel, suffix: str, member: ET.Element) -> None:
     elif suffix == "_inactive_value":
         signal.has_inactive_value = True
         signal.inactive_raw = member.get("startValue")
+    elif suffix == "_has_inactive_value":
+        signal.has_inactive_flag_member = True
     elif suffix == "_SigSendType":
         signal.has_sig_send_type = True
         signal.sig_send_type = _build_sig_send_type_table(_parse_value_table(member))
@@ -964,6 +968,35 @@ def _inactive_raw_expr(namespace: str, message_name: str, signal: SignalModel) -
     return _sysvar(namespace, message_name, f"{signal.name}_inactive_value")
 
 
+def _inactive_compare_target(
+    namespace: str, message_name: str, signal: SignalModel, suffix: str
+) -> Optional[str]:
+    """IfActive/CA 用来和 _old/_new 比较的 inactive 表达式。无 _inactive_value 则无法比较。"""
+    if not signal.has_inactive_value or suffix not in ("_Pv", "_Rv"):
+        return None
+    if suffix == "_Pv":
+        return _inactive_phys_expr(namespace, message_name, signal)
+    return _inactive_raw_expr(namespace, message_name, signal)
+
+
+def _with_inactive_flag(
+    namespace: str, message_name: str, signal: SignalModel, condition: str
+) -> str:
+    """有 {Sig}_has_inactive_value 时，运行时必须为 1 才启用 inactive 相关判定。"""
+    if not signal.has_inactive_flag_member:
+        return condition
+    flag = _sysvar(namespace, message_name, f"{signal.name}_has_inactive_value")
+    return f"{flag} == 1 && {condition}"
+
+
+def _if_active_edge_condition(inactive_expr: str) -> str:
+    """IfActive：inactive ↔ 非 inactive 双向边沿都触发（不含 active→active）。"""
+    return (
+        f"((_old == ({inactive_expr}) && _new != ({inactive_expr}))"
+        f" || (_old != ({inactive_expr}) && _new == ({inactive_expr})))"
+    )
+
+
 def _restore_pending_var(message_name: str, member_name: str) -> str:
     return f"restore_pending_{message_name}_{member_name}"
 
@@ -1123,12 +1156,16 @@ def _append_burst_trigger_lines(
         _sysvar(namespace, message_name, f"{signal.name}_SigSendType") if sig_table else None
     )
 
-    inactive_cmp = None
-    if signal.has_inactive_value and suffix in ("_Pv", "_Rv"):
-        if suffix == "_Pv":
-            inactive_cmp = f"_new != ({_inactive_phys_expr(namespace, message_name, signal)})"
-        else:
-            inactive_cmp = f"_new != ({_inactive_raw_expr(namespace, message_name, signal)})"
+    inactive_expr = _inactive_compare_target(namespace, message_name, signal, suffix)
+    if_active_cmp = None
+    ca_inactive_cmp = None
+    if inactive_expr is not None:
+        if_active_cmp = _with_inactive_flag(
+            namespace, message_name, signal, _if_active_edge_condition(inactive_expr)
+        )
+        ca_inactive_cmp = _with_inactive_flag(
+            namespace, message_name, signal, f"_new != ({inactive_expr})"
+        )
 
     lines.append(f"  _old = {shadow};")
     lines.append(f"  _new = {sv};")
@@ -1147,9 +1184,9 @@ def _append_burst_trigger_lines(
     lines.append("      _use_fast = 0;")
     lines.append("    }")
 
-    if inactive_cmp:
+    if if_active_cmp:
         lines.append(
-            f"    else if ({send_type_expr} == {MSG_SEND_IF_ACTIVE} && _old != _new && ({inactive_cmp}))"
+            f"    else if ({send_type_expr} == {MSG_SEND_IF_ACTIVE} && _old != _new && ({if_active_cmp}))"
         )
         lines.append("    {")
         lines.append("      _triggered = 1;")
@@ -1175,10 +1212,10 @@ def _append_burst_trigger_lines(
             lines.append("      _use_fast = 1;")
             lines.append("    }")
 
-    if inactive_cmp and sig_send_type_expr and sig_table and sig_table.cycle is not None:
+    if ca_inactive_cmp and sig_send_type_expr and sig_table and sig_table.cycle is not None:
         lines.append(
             f"    else if ({send_type_expr} == {MSG_SEND_CA} && {sig_send_type_expr} != {sig_table.cycle}"
-            f" && _old != _new && ({inactive_cmp}))"
+            f" && _old != _new && ({ca_inactive_cmp}))"
         )
         lines.append("    {")
         lines.append("      _triggered = 1;")
