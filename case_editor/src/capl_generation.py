@@ -966,13 +966,18 @@ def _restore_pending_var(message_name: str, member_name: str) -> str:
     return f"restore_pending_{message_name}_{member_name}"
 
 
-def _build_burst_variables(
-    message_name: str, model: MessageModel, exclude: Optional[set] = None
-) -> List[str]:
-    lines = [
+def _build_core_burst_timer_variables(message_name: str) -> List[str]:
+    """arm / timer / send 始终引用 burst_left / burst_fast，所有带定时器的报文都必须声明。"""
+    return [
         f"  long burst_left_{message_name};",
         f"  long burst_fast_{message_name};",
     ]
+
+
+def _build_burst_variables(
+    message_name: str, model: MessageModel, exclude: Optional[set] = None
+) -> List[str]:
+    lines: List[str] = []
     if _is_mux_message(model):
         lines.append(f"  long {_burst_mux_var(message_name)};")
     for signal, suffix in _watchable_members(model, exclude):
@@ -1150,7 +1155,7 @@ def _append_burst_trigger_lines(
     lines.append(f"    {_restore_pending_var(message_name, member)} = 1;")
     lines.append(f"    {_restore_var(message_name, member)} = _old;")
     lines.append(f"    {shadow} = _new;")
-    if model.mux is not None and signal.has_multiplexer_id:
+    if model.mux is not None:
         burst_mux = _burst_mux_var(message_name)
         # 仅纯 Event / IfActive burst 设置单 group；CE/CA 的 E/A burst 在 send 中按全子 ID 发送。
         lines.append(
@@ -1158,7 +1163,11 @@ def _append_burst_trigger_lines(
             f" || {send_type_expr} == {MSG_SEND_IF_ACTIVE})"
         )
         lines.append("    {")
-        lines.append(f"      {burst_mux} = {signal.multiplexer_id};")
+        if signal.has_multiplexer_id and signal.multiplexer_id is not None:
+            mux_group = signal.multiplexer_id
+        else:
+            mux_group = model.mux.groups[0]
+        lines.append(f"      {burst_mux} = {mux_group};")
         lines.append("    }")
     lines.append(f"    begin_burst_{message_name}(_use_fast);")
     lines.append("  }")
@@ -1342,6 +1351,7 @@ def _build_can_file(
             )
         out.append(_message_decl(name, frame_id))
         out.append(f"  msTimer tmr_{name};")
+        out.extend(_build_core_burst_timer_variables(name))
         if _counter_enabled(msg_cfg, model):
             out.append(f"  long cnt_{name};")
         exclude = set()
@@ -1371,9 +1381,9 @@ def _build_can_file(
                 sig = msg_cfg.get(key, "")
                 if sig:
                     exclude.add(sig)
+        out.append(f"  burst_left_{name} = 0;")
+        out.append(f"  burst_fast_{name} = 0;")
         if model.info and model.info.has_msg_send_type:
-            out.append(f"  burst_left_{name} = 0;")
-            out.append(f"  burst_fast_{name} = 0;")
             if _is_mux_message(model):
                 out.append(f"  {_burst_mux_var(name)} = -1;")
             for signal, suffix in _watchable_members(model, exclude):
@@ -1535,6 +1545,7 @@ def _build_send_function(
             lines.append(f"      output({msg});")
             lines.append("      return;")
             lines.append("    }")
+            lines.append("    return;")
             lines.append("  }")
         _append_mux_send_all_groups_lines(lines, message_name, model)
     else:

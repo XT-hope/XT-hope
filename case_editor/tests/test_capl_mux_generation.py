@@ -111,13 +111,61 @@ class CaplMuxGenerationTest(unittest.TestCase):
         send_body = "\n".join(
             _build_send_function("Control", "Control", "Media", model.name, model, parsed)
         )
-        # Event burst: burst_mux 单 group 发送必须在 burst_left 块内，且 CE/CA 的 return 不能 unconditional
         self.assertIn("if (burst_mux_Media_0x32B >= 0)", send_body)
         self.assertIn("fill_Media_0x32B_group(burst_mux_Media_0x32B);", send_body)
         self.assertNotIn(
             "    return;\n  }\n  if (burst_left_Media_0x32B > 0 && burst_mux_Media_0x32B >= 0)",
             send_body,
         )
+
+    def test_burst_block_does_not_fallthrough_to_periodic_send(self) -> None:
+        vsysvar = MUX_VSYSVAR.replace(
+            'Media_0x32B_MsgSendType" type="int" startValue="0"',
+            'Media_0x32B_MsgSendType" type="int" startValue="1"',
+            1,
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
+            fh.write(vsysvar)
+            path = fh.name
+
+        parsed = parse_vsysvar(path)
+        model = parsed.messages["Media_0x32B"]
+        from case_editor.src.capl_generation import _build_send_function
+
+        send_body = "\n".join(
+            _build_send_function("Control", "Control", "Media", model.name, model, parsed)
+        )
+        # burst_left 块末尾必须有 return，防止 Event burst 误落到周期全 group 发送
+        self.assertIn(
+            "    if (burst_mux_Media_0x32B >= 0)\n"
+            "    {\n"
+            "      fill_Media_0x32B_group(burst_mux_Media_0x32B);\n"
+            "      output(msg_Media_0x32B);\n"
+            "      return;\n"
+            "    }\n"
+            "    return;\n"
+            "  }",
+            send_body,
+        )
+
+    def test_core_burst_vars_declared_without_msg_send_type(self) -> None:
+        vsysvar = MUX_VSYSVAR.replace(
+            '<structMember name="Media_0x32B_MsgSendType" type="int" startValue="0" minValue="0" maxValue="4" bitcount="32" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>\n',
+            "",
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
+            fh.write(vsysvar)
+            path = fh.name
+
+        parsed = parse_vsysvar(path)
+        model = parsed.messages["Media_0x32B"]
+        msg_cfg = {"message_name": "Media_0x32B", "has_validation": False}
+        content = _build_can_file("media", "Media", 1, [(msg_cfg, model)], parsed, {model.name: 0x32B})
+
+        self.assertIn("long burst_left_Media_0x32B;", content)
+        self.assertIn("long burst_fast_Media_0x32B;", content)
+        self.assertNotIn("burst_mux_Media_0x32B", content)
+        self.assertNotIn("g_prev_Media_0x32B_", content)
 
     def test_fill_group_merges_same_mux_id(self) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
