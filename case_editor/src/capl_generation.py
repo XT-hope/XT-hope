@@ -11,7 +11,7 @@ CAPL 生成器
 - 每个报文按系统变量进行模拟发送，支持 MsgSendType：
     Cycle / Event / IfActive / CE / CA（数值与 DBC GenMsgSendType 一致：0~4）。
     若 .vsysvar 中没有 {Msg}_MsgSendType，按 Cycle 周期发送（_MsgCycleTime，缺省 10ms）。
-    IfActive：在 {Sig}_has_inactive_value==1 时，Pv/Rv 跨越 inactive（进入或离开）都触发 burst。
+    IfActive / CA：在 {Sig}_has_inactive_value==1 时，Pv/Rv 跨越 inactive（进入或离开）都触发 burst。
 - 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；报文对象 msg.信号 赋物理值。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
@@ -990,7 +990,7 @@ def _with_inactive_flag(
 
 
 def _if_active_edge_condition(inactive_expr: str) -> str:
-    """IfActive：inactive ↔ 非 inactive 双向边沿都触发（不含 active→active）。"""
+    """IfActive / CA：inactive ↔ 非 inactive 双向边沿都触发（不含 active→active）。"""
     return (
         f"((_old == ({inactive_expr}) && _new != ({inactive_expr}))"
         f" || (_old != ({inactive_expr}) && _new == ({inactive_expr})))"
@@ -1157,14 +1157,10 @@ def _append_burst_trigger_lines(
     )
 
     inactive_expr = _inactive_compare_target(namespace, message_name, signal, suffix)
-    if_active_cmp = None
-    ca_inactive_cmp = None
+    inactive_edge_cmp = None
     if inactive_expr is not None:
-        if_active_cmp = _with_inactive_flag(
+        inactive_edge_cmp = _with_inactive_flag(
             namespace, message_name, signal, _if_active_edge_condition(inactive_expr)
-        )
-        ca_inactive_cmp = _with_inactive_flag(
-            namespace, message_name, signal, f"_new != ({inactive_expr})"
         )
 
     lines.append(f"  _old = {shadow};")
@@ -1184,9 +1180,9 @@ def _append_burst_trigger_lines(
     lines.append("      _use_fast = 0;")
     lines.append("    }")
 
-    if if_active_cmp:
+    if inactive_edge_cmp:
         lines.append(
-            f"    else if ({send_type_expr} == {MSG_SEND_IF_ACTIVE} && _old != _new && ({if_active_cmp}))"
+            f"    else if ({send_type_expr} == {MSG_SEND_IF_ACTIVE} && _old != _new && ({inactive_edge_cmp}))"
         )
         lines.append("    {")
         lines.append("      _triggered = 1;")
@@ -1212,10 +1208,10 @@ def _append_burst_trigger_lines(
             lines.append("      _use_fast = 1;")
             lines.append("    }")
 
-    if ca_inactive_cmp and sig_send_type_expr and sig_table and sig_table.cycle is not None:
+    if inactive_edge_cmp and sig_send_type_expr and sig_table and sig_table.cycle is not None:
         lines.append(
             f"    else if ({send_type_expr} == {MSG_SEND_CA} && {sig_send_type_expr} != {sig_table.cycle}"
-            f" && _old != _new && ({ca_inactive_cmp}))"
+            f" && _old != _new && ({inactive_edge_cmp}))"
         )
         lines.append("    {")
         lines.append("      _triggered = 1;")

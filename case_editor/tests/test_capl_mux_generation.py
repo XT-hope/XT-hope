@@ -198,7 +198,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertLess(shadow_idx, sv_idx)
         self.assertIn("g_sv_quiet_Media_0x32B = g_sv_quiet_Media_0x32B + 1;", restore_block)
 
-    def test_ca_trigger_requires_non_cycle_and_not_inactive(self) -> None:
+    def test_ca_trigger_uses_both_inactive_edges(self) -> None:
         vsysvar = MUX_VSYSVAR.replace(
             'Media_0x32B_MsgSendType" type="int" startValue="0"',
             'Media_0x32B_MsgSendType" type="int" startValue="4"',
@@ -224,13 +224,13 @@ class CaplMuxGenerationTest(unittest.TestCase):
         model = parsed.messages["Media_0x32B"]
         msg_cfg = {"message_name": "Media_0x32B", "has_validation": False}
         content = _build_can_file("media", "Media", 1, [(msg_cfg, model)], parsed, {model.name: 0x32B})
+        inactive = "@media::Media_0x32B.CSW_Enable_S_inactive_value"
         self.assertIn("== 4 && @media::Media_0x32B.CSW_Enable_S_SigSendType != 0", content)
         self.assertIn("_old != _new", content)
-        self.assertIn(
-            "@media::Media_0x32B.CSW_Enable_S_has_inactive_value == 1 && "
-            "_new != (@media::Media_0x32B.CSW_Enable_S_inactive_value)",
-            content,
-        )
+        self.assertIn("@media::Media_0x32B.CSW_Enable_S_has_inactive_value == 1", content)
+        self.assertIn(f"(_old == ({inactive}) && _new != ({inactive}))", content)
+        self.assertIn(f"(_old != ({inactive}) && _new == ({inactive}))", content)
+        self.assertIn(f"== {MSG_SEND_CA}", content)
 
     def test_if_active_triggers_on_both_inactive_edges(self) -> None:
         vsysvar = MUX_VSYSVAR.replace(
