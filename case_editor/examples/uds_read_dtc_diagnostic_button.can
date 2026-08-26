@@ -3,7 +3,12 @@
  * UDS ReadDTCInformation: 19 02 09
  * - 用系统变量 diagnosticButton 触发（置 1 发送，发送后自动清 0）
  * - 物理寻址请求 0x7E0 / 响应 0x7E8（可按项目修改）
- * - 支持 ISO-TP 单帧/多帧接收与 UDS 正/负响应解析
+ * 正响应（应用层）一般以 59 02 09 开头：
+ *   59       = 0x19+0x40
+ *   02       = 子功能回显
+ *   09       = StatusMask 回显
+ *   [Avail]  = DTCStatusAvailabilityMask
+ *   [DTC+st] = 每组 4 字节：DTC(3) + status(1)，可重复
  *
  * 使用前在 CANoe 中创建系统变量：
  *   名称: diagnosticButton
@@ -171,11 +176,18 @@ void Diag_ParseReadDtcByStatusMask(void)
     write("[UDS] Unexpected positive SID/sub: 0x%02X 0x%02X", udsRxBuf[0], udsRxBuf[1]);
     return;
   }
+  if (udsRxBuf[2] != DTC_STATUS_MASK)
+  {
+    write(
+      "[UDS] Warning: status mask echo 0x%02X != request 0x%02X",
+      udsRxBuf[2], DTC_STATUS_MASK
+    );
+  }
 
   availMask = udsRxBuf[3];
   write(
-    "[UDS] Positive ReadDTC: maskReq=0x%02X availMask=0x%02X payloadLen=%d",
-    udsRxBuf[2], availMask, udsRxLen
+    "[UDS] Positive 59 02 09: availMask=0x%02X payloadLen=%d",
+    availMask, udsRxLen
   );
 
   off = 4;
