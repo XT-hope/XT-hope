@@ -2,7 +2,7 @@
 /*
  * VDS 节点 UDS 诊断 CAPL
  *
- * 按 DBC 中 VDS 诊断 ID 对发送 19 02 09，在响应 ID 上解析 59 02 09。
+ * 按 DBC 中 VDS 诊断 ID 对发送 19 02 09，完整解析 UDS 正/负响应（不只识别 59 02 09 头）。
  *
  * Tx (VDS 发)  -> Rx (VDS 收)     DBC 信号（单信号承载 8 字节诊断数据）
  * 0x712 ADC    -> 0x71A           ADC_Diag_712_S / ADC_Diag_71A_S
@@ -20,6 +20,8 @@
  * 系统变量：
  *   diagnosticButton  int  1=触发
  *   diagnosticTarget  int  0~9 单 ECU，10=0x7DF，255=轮询全部物理 ECU
+ *   diagnosticDtcCount  int  最近一次解析到的 DTC 条数（可选）
+ *   diagnosticLastRxId  int  最近一次响应 CAN ID（可选）
  *
  * 默认 CAN 通道 DIAG_CAN_CH=2，按工程修改。
  */
@@ -431,105 +433,253 @@ void Diag_SendFunctional(void)
   output(msg_VDS_0x7DF);
 }
 
-void Diag_ParseNegative(long ecuIdx)
+void Diag_DescribeStatusFull(byte st, char out[], long outSize)
 {
-  char nrcDesc[48];
-  if (udsRxLen[ecuIdx] < 3)
-    return;
-  Diag_DescribeNrc(udsRxBuf[ecuIdx][2], nrcDesc, elCount(nrcDesc));
-  write("[VDS-Diag] ");
-  Diag_WriteEcuLabel(ecuIdx);
-  write(" Negative 7F SID=0x%02X NRC=0x%02X (%s)", udsRxBuf[ecuIdx][1], udsRxBuf[ecuIdx][2], nrcDesc);
+  snprintf(
+    out, outSize,
+    "bit0:testFailed=%d bit1:testFailedThisCycle=%d bit2:pending=%d bit3:confirmed=%d "
+    "bit4:!completedSinceClear=%d bit5:!completedThisCycle=%d bit6:MIL=%d bit7=%d raw=0x%02X",
+    (st & 0x01) != 0,
+    (st & 0x02) != 0,
+    (st & 0x04) != 0,
+    (st & 0x08) != 0,
+    (st & 0x10) != 0,
+    (st & 0x20) != 0,
+    (st & 0x40) != 0,
+    (st & 0x80) != 0,
+    st
+  );
 }
 
-void Diag_ParsePositive59_02_09(long ecuIdx)
+void Diag_DescribeAvailMask(byte mask)
 {
-  long off;
-  long dtcCount;
-  byte dtcB0, dtcB1, dtcB2, status;
-  char dtcStr[16];
-  char stStr[80];
-
-  if (udsRxLen[ecuIdx] < 4)
-  {
-    write("[VDS-Diag] ");
-    Diag_WriteEcuLabel(ecuIdx);
-    write(" positive too short");
-    return;
-  }
-  if (udsRxBuf[ecuIdx][0] != 0x59 || udsRxBuf[ecuIdx][1] != 0x02)
-  {
-    write("[VDS-Diag] ");
-    Diag_WriteEcuLabel(ecuIdx);
-    write(" unexpected SID 0x%02X", udsRxBuf[ecuIdx][0]);
-    return;
-  }
-  write("[VDS-Diag] ");
-  Diag_WriteEcuLabel(ecuIdx);
   write(
-    " Positive 59 02 %02X avail=0x%02X len=%d",
-    udsRxBuf[ecuIdx][2], udsRxBuf[ecuIdx][3], udsRxLen[ecuIdx]
+    "    AvailMask bits: TF=%d TFCycle=%d Pend=%d Conf=%d !SinceClr=%d !ThisCycle=%d MIL=%d reserved=%d raw=0x%02X",
+    (mask & 0x01) != 0,
+    (mask & 0x02) != 0,
+    (mask & 0x04) != 0,
+    (mask & 0x08) != 0,
+    (mask & 0x10) != 0,
+    (mask & 0x20) != 0,
+    (mask & 0x40) != 0,
+    (mask & 0x80) != 0,
+    mask
   );
+}
 
-  off = 4;
+void Diag_PrintFullUdsHex(long ecuIdx)
+{
+  long i;
+  long lineStart;
+  write("  --- UDS payload (complete, %d bytes) ---", udsRxLen[ecuIdx]);
+  lineStart = 0;
+  while (lineStart < udsRxLen[ecuIdx])
+  {
+    write(
+      "  %04X: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+      lineStart,
+      lineStart + 0 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 0] : 0,
+      lineStart + 1 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 1] : 0,
+      lineStart + 2 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 2] : 0,
+      lineStart + 3 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 3] : 0,
+      lineStart + 4 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 4] : 0,
+      lineStart + 5 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 5] : 0,
+      lineStart + 6 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 6] : 0,
+      lineStart + 7 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 7] : 0,
+      lineStart + 8 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 8] : 0,
+      lineStart + 9 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 9] : 0,
+      lineStart + 10 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 10] : 0,
+      lineStart + 11 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 11] : 0,
+      lineStart + 12 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 12] : 0,
+      lineStart + 13 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 13] : 0,
+      lineStart + 14 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 14] : 0,
+      lineStart + 15 < udsRxLen[ecuIdx] ? udsRxBuf[ecuIdx][lineStart + 15] : 0
+    );
+    lineStart += 16;
+  }
+  write("  --- end UDS payload ---");
+}
+
+void Diag_SetLastRxMeta(long ecuIdx, long rxId)
+{
+  @sysvar::diagnosticLastRxId = rxId;
+  @sysvar::diagnosticDtcCount = 0;
+}
+
+void Diag_ParseNegativeFull(long ecuIdx)
+{
+  char nrcDesc[48];
+  write("[VDS-Diag] ===== Negative Response =====");
+  Diag_PrintFullUdsHex(ecuIdx);
+  if (udsRxLen[ecuIdx] >= 1)
+    write("  [0] NegativeResponseSID   = 0x%02X", udsRxBuf[ecuIdx][0]);
+  if (udsRxLen[ecuIdx] >= 2)
+    write("  [1] RequestedSID          = 0x%02X", udsRxBuf[ecuIdx][1]);
+  if (udsRxLen[ecuIdx] >= 3)
+  {
+    Diag_DescribeNrc(udsRxBuf[ecuIdx][2], nrcDesc, elCount(nrcDesc));
+    write("  [2] NRC                   = 0x%02X (%s)", udsRxBuf[ecuIdx][2], nrcDesc);
+  }
+  write("[VDS-Diag] ===== End Negative =====");
+}
+
+void Diag_ParseDtcRecords(long ecuIdx, long off, long recordSize)
+{
+  long dtcCount;
+  byte dtcB0, dtcB1, dtcB2, failType, status;
+  char dtcStr[16];
+  char stStr[160];
+
   dtcCount = 0;
-  while (off + 3 < udsRxLen[ecuIdx])
+  while (off + recordSize - 1 < udsRxLen[ecuIdx])
   {
     dtcB0 = udsRxBuf[ecuIdx][off];
     dtcB1 = udsRxBuf[ecuIdx][off + 1];
     dtcB2 = udsRxBuf[ecuIdx][off + 2];
-    status = udsRxBuf[ecuIdx][off + 3];
-    off += 4;
+    if (recordSize == 5)
+    {
+      failType = udsRxBuf[ecuIdx][off + 3];
+      status = udsRxBuf[ecuIdx][off + 4];
+    }
+    else
+    {
+      failType = dtcB2 & 0x0F;
+      status = udsRxBuf[ecuIdx][off + 3];
+    }
+    off += recordSize;
+
     Diag_FormatDtcCode(dtcB0, dtcB1, dtcB2, dtcStr, elCount(dtcStr));
-    Diag_DescribeStatus(status, stStr, elCount(stStr));
-    write("[VDS-Diag] ");
-    Diag_WriteEcuLabel(ecuIdx);
-    write(" DTC#%d %s raw=%02X%02X%02X %s", dtcCount + 1, dtcStr, dtcB0, dtcB1, dtcB2, stStr);
+    Diag_DescribeStatusFull(status, stStr, elCount(stStr));
+    write(
+      "  DTC#%d code=%s rawDTC=0x%02X%02X%02X failureType=0x%02X",
+      dtcCount + 1, dtcStr, dtcB0, dtcB1, dtcB2, failType
+    );
+    write("         status: %s", stStr);
     dtcCount++;
   }
-  if (dtcCount == 0)
+
+  @sysvar::diagnosticDtcCount = dtcCount;
+  if (off < udsRxLen[ecuIdx])
   {
-    write("[VDS-Diag] ");
-    Diag_WriteEcuLabel(ecuIdx);
-    write(" no DTC for mask 0x%02X", DTC_STATUS_MASK);
+    write("  trailing bytes (%d):", udsRxLen[ecuIdx] - off);
+    while (off < udsRxLen[ecuIdx])
+    {
+      write("    [%d] = 0x%02X", off, udsRxBuf[ecuIdx][off]);
+      off++;
+    }
+  }
+  if (dtcCount == 0)
+    write("  (no DTC records in payload)");
+  else
+    write("  total DTC records: %d", dtcCount);
+}
+
+void Diag_ParsePositiveReadDtcFull(long ecuIdx)
+{
+  long off;
+  long payloadLen;
+  long recordSize;
+  byte availMask;
+
+  write("[VDS-Diag] ===== Positive ReadDTC Full Parse =====");
+  Diag_PrintFullUdsHex(ecuIdx);
+
+  if (udsRxLen[ecuIdx] < 3)
+  {
+    write("  payload too short for ReadDTC parse");
+    write("[VDS-Diag] ===== End =====");
+    return;
+  }
+
+  write("  [0] PositiveResponseSID   = 0x%02X (ReadDTCInformation+0x40)", udsRxBuf[ecuIdx][0]);
+  write("  [1] ReportType            = 0x%02X (reportDTCByStatusMask)", udsRxBuf[ecuIdx][1]);
+  write("  [2] StatusMaskEcho        = 0x%02X", udsRxBuf[ecuIdx][2]);
+
+  if (udsRxLen[ecuIdx] >= 4)
+  {
+    availMask = udsRxBuf[ecuIdx][3];
+    write("  [3] DTCStatusAvailabilityMask = 0x%02X", availMask);
+    Diag_DescribeAvailMask(availMask);
+    off = 4;
   }
   else
   {
-    write("[VDS-Diag] ");
-    Diag_WriteEcuLabel(ecuIdx);
-    write(" total %d DTC(s)", dtcCount);
+    off = 3;
+    write("  (no availability mask byte)");
   }
+
+  payloadLen = udsRxLen[ecuIdx] - off;
+  write("  DTC data region: offset=%d length=%d bytes", off, payloadLen);
+
+  if (payloadLen <= 0)
+  {
+    write("  (no DTC data after header)");
+    @sysvar::diagnosticDtcCount = 0;
+    write("[VDS-Diag] ===== End =====");
+    return;
+  }
+
+  /* 自动判断 4 字节/条(DTC3+status) 或 5 字节/条(DTC3+FT+status) */
+  if (payloadLen % 5 == 0)
+    recordSize = 5;
+  else if (payloadLen % 4 == 0)
+    recordSize = 4;
+  else
+  {
+    recordSize = 4;
+    write("  warning: payload not aligned to 4 or 5 bytes per DTC, try 4-byte records");
+  }
+
+  write("  record format: %d bytes per DTC (3 DTC + %s + 1 status)",
+    recordSize, recordSize == 5 ? "1 FT" : "0 FT");
+  Diag_ParseDtcRecords(ecuIdx, off, recordSize);
+  write("[VDS-Diag] ===== End Full Parse =====");
 }
 
-void Diag_ParseUdsPayload(long ecuIdx)
+void Diag_ParseFullResult(long ecuIdx, long rxId)
 {
+  Diag_SetLastRxMeta(ecuIdx, rxId);
+  write("[VDS-Diag] ===== ");
+  Diag_WriteEcuLabel(ecuIdx);
+  write(" Rx ID=0x%X UDS len=%d =====", rxId, udsRxLen[ecuIdx]);
+
   if (udsRxLen[ecuIdx] < 1)
+  {
+    write("  empty UDS payload");
     return;
+  }
+
   if (udsRxBuf[ecuIdx][0] == 0x7F)
   {
-    Diag_ParseNegative(ecuIdx);
+    Diag_ParseNegativeFull(ecuIdx);
     return;
   }
-  if (udsRxBuf[ecuIdx][0] == 0x59 && udsRxBuf[ecuIdx][1] == 0x02)
+
+  if (udsRxBuf[ecuIdx][0] == 0x59 && udsRxLen[ecuIdx] >= 2 && udsRxBuf[ecuIdx][1] == 0x02)
   {
-    Diag_ParsePositive59_02_09(ecuIdx);
+    Diag_ParsePositiveReadDtcFull(ecuIdx);
     return;
   }
-  write("[VDS-Diag] ");
-  Diag_WriteEcuLabel(ecuIdx);
-  write(" unhandled SID 0x%02X", udsRxBuf[ecuIdx][0]);
+
+  /* 其它正响应：仍打印完整十六进制并按字节标注 */
+  write("[VDS-Diag] ===== Generic Positive / Unknown Service =====");
+  Diag_PrintFullUdsHex(ecuIdx);
+  write("  [0] SID = 0x%02X", udsRxBuf[ecuIdx][0]);
+  write("[VDS-Diag] ===== End =====");
 }
 
-void Diag_OnTpComplete(long ecuIdx)
+void Diag_ParseUdsPayload(long ecuIdx, long rxId)
 {
-  write("[VDS-Diag] Rx complete ");
-  Diag_WriteEcuLabel(ecuIdx);
-  write(" len=%d", udsRxLen[ecuIdx]);
-  Diag_ParseUdsPayload(ecuIdx);
+  Diag_ParseFullResult(ecuIdx, rxId);
+}
+
+void Diag_OnTpComplete(long ecuIdx, long rxId)
+{
+  Diag_ParseUdsPayload(ecuIdx, rxId);
   Diag_ResetTpRx(ecuIdx);
 }
 
-void Diag_OnRxMessage(long ecuIdx)
+void Diag_OnRxMessage(long ecuIdx, long rxId)
 {
   byte pci;
   long sfLen;
@@ -550,7 +700,7 @@ void Diag_OnRxMessage(long ecuIdx)
       udsRxBuf[ecuIdx][i] = this.byte(1 + i);
     udsRxLen[ecuIdx] = sfLen;
     udsRxIdx[ecuIdx] = sfLen;
-    Diag_OnTpComplete(ecuIdx);
+    Diag_OnTpComplete(ecuIdx, rxId);
     return;
   }
 
@@ -592,7 +742,7 @@ void Diag_OnRxMessage(long ecuIdx)
       udsRxBuf[ecuIdx][udsRxIdx[ecuIdx] + i] = this.byte(1 + i);
     udsRxIdx[ecuIdx] += copyLen;
     if (udsRxIdx[ecuIdx] >= udsRxLen[ecuIdx])
-      Diag_OnTpComplete(ecuIdx);
+      Diag_OnTpComplete(ecuIdx, rxId);
   }
 }
 
@@ -672,5 +822,5 @@ on message *
   ecuIdx = Diag_RxIdToEcuIdx(this.id);
   if (ecuIdx < 0)
     return;
-  Diag_OnRxMessage(ecuIdx);
+  Diag_OnRxMessage(ecuIdx, this.id);
 }

@@ -3,12 +3,11 @@
  * UDS ReadDTCInformation: 19 02 09
  * - 用系统变量 diagnosticButton 触发（置 1 发送，发送后自动清 0）
  * - 物理寻址请求 0x7E0 / 响应 0x7E8（可按项目修改）
- * 正响应（应用层）一般以 59 02 09 开头：
- *   59       = 0x19+0x40
- *   02       = 子功能回显
- *   09       = StatusMask 回显
- *   [Avail]  = DTCStatusAvailabilityMask
- *   [DTC+st] = 每组 4 字节：DTC(3) + status(1)，可重复
+ * 正响应完整解析（不只识别 59 02 09 头）：
+ *   完整 UDS payload 十六进制 dump
+ *   逐字段：SID / ReportType / MaskEcho / AvailMask 各位
+ *   逐条 DTC：P/C/B/U 码、failureType、status 各位
+ *   支持 4 字节/条(DTC3+status) 或 5 字节/条(DTC3+FT+status)
  *
  * 使用前在 CANoe 中创建系统变量：
  *   名称: diagnosticButton
@@ -141,78 +140,189 @@ void Diag_SendFlowControlContinue(void)
   output(diagReq);
 }
 
-void Diag_ParseNegativeResponse(void)
+void Diag_DescribeAvailMask(byte mask)
 {
-  char nrcDesc[64];
-  if (udsRxLen < 3)
-  {
-    write("[UDS] Negative response too short");
-    return;
-  }
-  Diag_DescribeNrc(udsRxBuf[2], nrcDesc, elCount(nrcDesc));
   write(
-    "[UDS] Negative: 7F SID=0x%02X NRC=0x%02X (%s)",
-    udsRxBuf[1], udsRxBuf[2], nrcDesc
+    "    AvailMask bits: TF=%d TFCycle=%d Pend=%d Conf=%d !SinceClr=%d !ThisCycle=%d MIL=%d reserved=%d raw=0x%02X",
+    (mask & 0x01) != 0,
+    (mask & 0x02) != 0,
+    (mask & 0x04) != 0,
+    (mask & 0x08) != 0,
+    (mask & 0x10) != 0,
+    (mask & 0x20) != 0,
+    (mask & 0x40) != 0,
+    (mask & 0x80) != 0,
+    mask
   );
 }
 
-void Diag_ParseReadDtcByStatusMask(void)
+void Diag_PrintFullUdsHex(void)
 {
   long i;
-  long off;
-  byte availMask;
-  byte dtcB0, dtcB1, dtcB2, status;
-  char dtcStr[16];
-  char stStr[128];
-  long dtcCount;
-
-  if (udsRxLen < 4)
-  {
-    write("[UDS] Positive 59 02 too short, len=%d", udsRxLen);
-    return;
-  }
-  if (udsRxBuf[0] != 0x59 || udsRxBuf[1] != 0x02)
-  {
-    write("[UDS] Unexpected positive SID/sub: 0x%02X 0x%02X", udsRxBuf[0], udsRxBuf[1]);
-    return;
-  }
-  if (udsRxBuf[2] != DTC_STATUS_MASK)
+  long lineStart;
+  write("  --- UDS payload (complete, %d bytes) ---", udsRxLen);
+  lineStart = 0;
+  while (lineStart < udsRxLen)
   {
     write(
-      "[UDS] Warning: status mask echo 0x%02X != request 0x%02X",
-      udsRxBuf[2], DTC_STATUS_MASK
+      "  %04X: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+      lineStart,
+      lineStart + 0 < udsRxLen ? udsRxBuf[lineStart + 0] : 0,
+      lineStart + 1 < udsRxLen ? udsRxBuf[lineStart + 1] : 0,
+      lineStart + 2 < udsRxLen ? udsRxBuf[lineStart + 2] : 0,
+      lineStart + 3 < udsRxLen ? udsRxBuf[lineStart + 3] : 0,
+      lineStart + 4 < udsRxLen ? udsRxBuf[lineStart + 4] : 0,
+      lineStart + 5 < udsRxLen ? udsRxBuf[lineStart + 5] : 0,
+      lineStart + 6 < udsRxLen ? udsRxBuf[lineStart + 6] : 0,
+      lineStart + 7 < udsRxLen ? udsRxBuf[lineStart + 7] : 0,
+      lineStart + 8 < udsRxLen ? udsRxBuf[lineStart + 8] : 0,
+      lineStart + 9 < udsRxLen ? udsRxBuf[lineStart + 9] : 0,
+      lineStart + 10 < udsRxLen ? udsRxBuf[lineStart + 10] : 0,
+      lineStart + 11 < udsRxLen ? udsRxBuf[lineStart + 11] : 0,
+      lineStart + 12 < udsRxLen ? udsRxBuf[lineStart + 12] : 0,
+      lineStart + 13 < udsRxLen ? udsRxBuf[lineStart + 13] : 0,
+      lineStart + 14 < udsRxLen ? udsRxBuf[lineStart + 14] : 0,
+      lineStart + 15 < udsRxLen ? udsRxBuf[lineStart + 15] : 0
     );
+    lineStart += 16;
   }
+  write("  --- end UDS payload ---");
+}
 
-  availMask = udsRxBuf[3];
-  write(
-    "[UDS] Positive 59 02 09: availMask=0x%02X payloadLen=%d",
-    availMask, udsRxLen
-  );
+void Diag_ParseNegativeResponse(void)
+{
+  char nrcDesc[64];
+  write("[UDS] ===== Negative Response =====");
+  Diag_PrintFullUdsHex();
+  if (udsRxLen < 3)
+  {
+    write("  negative response too short");
+    write("[UDS] ===== End Negative =====");
+    return;
+  }
+  write("  [0] NegativeResponseSID   = 0x%02X", udsRxBuf[0]);
+  write("  [1] RequestedSID          = 0x%02X", udsRxBuf[1]);
+  Diag_DescribeNrc(udsRxBuf[2], nrcDesc, elCount(nrcDesc));
+  write("  [2] NRC                   = 0x%02X (%s)", udsRxBuf[2], nrcDesc);
+  write("[UDS] ===== End Negative =====");
+}
 
-  off = 4;
+void Diag_ParseDtcRecords(long off, long recordSize)
+{
+  long dtcCount;
+  byte dtcB0, dtcB1, dtcB2, failType, status;
+  char dtcStr[16];
+  char stStr[128];
+
   dtcCount = 0;
-  while (off + 3 < udsRxLen)
+  while (off + recordSize - 1 < udsRxLen)
   {
     dtcB0 = udsRxBuf[off];
     dtcB1 = udsRxBuf[off + 1];
     dtcB2 = udsRxBuf[off + 2];
-    status = udsRxBuf[off + 3];
-    off += 4;
+    if (recordSize == 5)
+    {
+      failType = udsRxBuf[off + 3];
+      status = udsRxBuf[off + 4];
+    }
+    else
+    {
+      failType = dtcB2 & 0x0F;
+      status = udsRxBuf[off + 3];
+    }
+    off += recordSize;
 
     Diag_FormatDtcCode(dtcB0, dtcB1, dtcB2, dtcStr, elCount(dtcStr));
     Diag_DescribeStatus(status, stStr, elCount(stStr));
     write(
-      "[UDS] DTC#%d: %s raw=0x%02X%02X%02X status: %s",
-      dtcCount + 1, dtcStr, dtcB0, dtcB1, dtcB2, stStr
+      "  DTC#%d code=%s rawDTC=0x%02X%02X%02X failureType=0x%02X",
+      dtcCount + 1, dtcStr, dtcB0, dtcB1, dtcB2, failType
     );
+    write("         status: %s", stStr);
     dtcCount++;
   }
 
+  if (off < udsRxLen)
+  {
+    write("  trailing bytes (%d):", udsRxLen - off);
+    while (off < udsRxLen)
+    {
+      write("    [%d] = 0x%02X", off, udsRxBuf[off]);
+      off++;
+    }
+  }
   if (dtcCount == 0)
-    write("[UDS] No DTC matched mask 0x%02X", DTC_STATUS_MASK);
+    write("  (no DTC records in payload)");
   else
-    write("[UDS] Total DTC count: %d", dtcCount);
+    write("  total DTC records: %d", dtcCount);
+}
+
+void Diag_ParseReadDtcByStatusMask(void)
+{
+  long off;
+  long payloadLen;
+  long recordSize;
+  byte availMask;
+
+  write("[UDS] ===== Positive ReadDTC Full Parse =====");
+  Diag_PrintFullUdsHex();
+
+  if (udsRxLen < 3)
+  {
+    write("  payload too short for ReadDTC parse");
+    write("[UDS] ===== End =====");
+    return;
+  }
+  if (udsRxBuf[0] != 0x59 || udsRxBuf[1] != 0x02)
+  {
+    write("  unexpected SID/sub: 0x%02X 0x%02X", udsRxBuf[0], udsRxBuf[1]);
+    write("[UDS] ===== End =====");
+    return;
+  }
+
+  write("  [0] PositiveResponseSID   = 0x%02X (ReadDTCInformation+0x40)", udsRxBuf[0]);
+  write("  [1] ReportType            = 0x%02X (reportDTCByStatusMask)", udsRxBuf[1]);
+  write("  [2] StatusMaskEcho        = 0x%02X", udsRxBuf[2]);
+  if (udsRxBuf[2] != DTC_STATUS_MASK)
+    write("  warning: mask echo 0x%02X != request 0x%02X", udsRxBuf[2], DTC_STATUS_MASK);
+
+  if (udsRxLen >= 4)
+  {
+    availMask = udsRxBuf[3];
+    write("  [3] DTCStatusAvailabilityMask = 0x%02X", availMask);
+    Diag_DescribeAvailMask(availMask);
+    off = 4;
+  }
+  else
+  {
+    off = 3;
+    write("  (no availability mask byte)");
+  }
+
+  payloadLen = udsRxLen - off;
+  write("  DTC data region: offset=%d length=%d bytes", off, payloadLen);
+
+  if (payloadLen <= 0)
+  {
+    write("  (no DTC data after header)");
+    write("[UDS] ===== End Full Parse =====");
+    return;
+  }
+
+  if (payloadLen % 5 == 0)
+    recordSize = 5;
+  else if (payloadLen % 4 == 0)
+    recordSize = 4;
+  else
+  {
+    recordSize = 4;
+    write("  warning: payload not aligned to 4 or 5 bytes per DTC, try 4-byte records");
+  }
+
+  write("  record format: %d bytes per DTC (3 DTC + %s + 1 status)",
+    recordSize, recordSize == 5 ? "1 FT" : "0 FT");
+  Diag_ParseDtcRecords(off, recordSize);
+  write("[UDS] ===== End Full Parse =====");
 }
 
 void Diag_ParseUdsPayload(void)
@@ -232,7 +342,10 @@ void Diag_ParseUdsPayload(void)
     Diag_ParseReadDtcByStatusMask();
     return;
   }
-  write("[UDS] Unhandled positive SID=0x%02X", udsRxBuf[0]);
+  write("[UDS] ===== Generic Positive / Unknown Service =====");
+  Diag_PrintFullUdsHex();
+  write("  [0] SID = 0x%02X", udsRxBuf[0]);
+  write("[UDS] ===== End =====");
 }
 
 void Diag_OnTpComplete(void)
