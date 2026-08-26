@@ -1,0 +1,334 @@
+/*@!Encoding:65001*/
+/*
+ * UDS ReadDTCInformation: 19 02 09
+ * - 用系统变量 diagnosticButton 触发（置 1 发送，发送后自动清 0）
+ * - 物理寻址请求 0x7E0 / 响应 0x7E8（可按项目修改）
+ * - 支持 ISO-TP 单帧/多帧接收与 UDS 正/负响应解析
+ *
+ * 使用前在 CANoe 中创建系统变量：
+ *   名称: diagnosticButton
+ *   类型: int (32bit)
+ *   初值: 0
+ *
+ * 若变量在命名空间 MyNs 下，将 on sysvar 改为 on sysvar MyNs::diagnosticButton
+ */
+
+#define DIAG_CAN_CH           1
+#define DIAG_REQ_ID           0x7E0
+#define DIAG_RESP_ID          0x7E8
+#define DTC_STATUS_MASK       0x09
+
+variables
+{
+  message DIAG_REQ_ID diagReq;
+  message DIAG_RESP_ID diagResp;
+
+  const long UDS_BUF_SIZE = 4096;
+  byte udsRxBuf[4096];
+  long udsRxLen;
+  long udsRxIdx;
+  byte tpExpectSeq;
+
+  long tpRxActive;
+}
+
+/* 将 DTC 三字节 + failure type 格式化为 P/C/B/U 显示（SAE J2012 简化） */
+void Diag_FormatDtcCode(byte b0, byte b1, byte b2, char out[], long outSize)
+{
+  char prefix;
+  long val;
+  val = ((b0 & 0xFF) << 16) | ((b1 & 0xFF) << 8) | (b2 & 0xFF);
+  switch ((b0 >> 6) & 0x03)
+  {
+    case 0: prefix = 'P'; break;
+    case 1: prefix = 'C'; break;
+    case 2: prefix = 'B'; break;
+    default: prefix = 'U'; break;
+  }
+  snprintf(out, outSize, "%c%06X", prefix, val & 0x3FFFFF);
+}
+
+void Diag_DescribeStatus(byte st, char out[], long outSize)
+{
+  snprintf(
+    out, outSize,
+    "TF=%d TFCycle=%d Pend=%d Conf=%d !SinceClr=%d !ThisCycle=%d MIL=%d raw=0x%02X",
+    (st & 0x01) != 0,
+    (st & 0x02) != 0,
+    (st & 0x04) != 0,
+    (st & 0x08) != 0,
+    (st & 0x10) != 0,
+    (st & 0x20) != 0,
+    (st & 0x40) != 0,
+    st
+  );
+}
+
+void Diag_DescribeNrc(byte nrc, char out[], long outSize)
+{
+  switch (nrc)
+  {
+    case 0x10: snprintf(out, outSize, "generalReject"); break;
+    case 0x11: snprintf(out, outSize, "serviceNotSupported"); break;
+    case 0x12: snprintf(out, outSize, "subFunctionNotSupported"); break;
+    case 0x13: snprintf(out, outSize, "incorrectMessageLengthOrInvalidFormat"); break;
+    case 0x22: snprintf(out, outSize, "conditionsNotCorrect"); break;
+    case 0x24: snprintf(out, outSize, "requestSequenceError"); break;
+    case 0x31: snprintf(out, outSize, "requestOutOfRange"); break;
+    case 0x33: snprintf(out, outSize, "securityAccessDenied"); break;
+    case 0x78: snprintf(out, outSize, "responsePending"); break;
+    case 0x7E: snprintf(out, outSize, "subFunctionNotSupportedInActiveSession"); break;
+    case 0x7F: snprintf(out, outSize, "serviceNotSupportedInActiveSession"); break;
+    default:   snprintf(out, outSize, "unknown"); break;
+  }
+}
+
+void Diag_ResetTpRx(void)
+{
+  udsRxLen = 0;
+  udsRxIdx = 0;
+  tpExpectSeq = 1;
+  tpRxActive = 0;
+}
+
+/* ISO-TP 单帧发送（UDS 数据 1~7 字节） */
+void Diag_SendTpSingle(byte data[], long len)
+{
+  long i;
+  if (len < 1 || len > 7)
+  {
+    write("[UDS] SF length invalid: %d", len);
+    return;
+  }
+  diagReq.CAN = DIAG_CAN_CH;
+  diagReq.byte(0) = (byte)(len & 0x0F);
+  for (i = 0; i < len; i++)
+    diagReq.byte(i + 1) = data[i];
+  for (i = len + 1; i < 8; i++)
+    diagReq.byte(i) = 0x00;
+  output(diagReq);
+}
+
+/* 发送 19 02 09 */
+void Diag_SendReadDtc_19_02_09(void)
+{
+  byte req[3];
+  req[0] = 0x19;
+  req[1] = 0x02;
+  req[2] = DTC_STATUS_MASK;
+  Diag_ResetTpRx();
+  write("[UDS] Tx ReadDTC: 19 02 %02X", DTC_STATUS_MASK);
+  Diag_SendTpSingle(req, 3);
+}
+
+/* 发送流控 Continue */
+void Diag_SendFlowControlContinue(void)
+{
+  diagReq.CAN = DIAG_CAN_CH;
+  diagReq.byte(0) = 0x30;
+  diagReq.byte(1) = 0x00;
+  diagReq.byte(2) = 0x00;
+  diagReq.byte(3) = 0x00;
+  diagReq.byte(4) = 0x00;
+  diagReq.byte(5) = 0x00;
+  diagReq.byte(6) = 0x00;
+  diagReq.byte(7) = 0x00;
+  output(diagReq);
+}
+
+void Diag_ParseNegativeResponse(void)
+{
+  char nrcDesc[64];
+  if (udsRxLen < 3)
+  {
+    write("[UDS] Negative response too short");
+    return;
+  }
+  Diag_DescribeNrc(udsRxBuf[2], nrcDesc, elCount(nrcDesc));
+  write(
+    "[UDS] Negative: 7F SID=0x%02X NRC=0x%02X (%s)",
+    udsRxBuf[1], udsRxBuf[2], nrcDesc
+  );
+}
+
+void Diag_ParseReadDtcByStatusMask(void)
+{
+  long i;
+  long off;
+  byte availMask;
+  byte dtcB0, dtcB1, dtcB2, status;
+  char dtcStr[16];
+  char stStr[128];
+  long dtcCount;
+
+  if (udsRxLen < 4)
+  {
+    write("[UDS] Positive 59 02 too short, len=%d", udsRxLen);
+    return;
+  }
+  if (udsRxBuf[0] != 0x59 || udsRxBuf[1] != 0x02)
+  {
+    write("[UDS] Unexpected positive SID/sub: 0x%02X 0x%02X", udsRxBuf[0], udsRxBuf[1]);
+    return;
+  }
+
+  availMask = udsRxBuf[3];
+  write(
+    "[UDS] Positive ReadDTC: maskReq=0x%02X availMask=0x%02X payloadLen=%d",
+    udsRxBuf[2], availMask, udsRxLen
+  );
+
+  off = 4;
+  dtcCount = 0;
+  while (off + 3 < udsRxLen)
+  {
+    dtcB0 = udsRxBuf[off];
+    dtcB1 = udsRxBuf[off + 1];
+    dtcB2 = udsRxBuf[off + 2];
+    status = udsRxBuf[off + 3];
+    off += 4;
+
+    Diag_FormatDtcCode(dtcB0, dtcB1, dtcB2, dtcStr, elCount(dtcStr));
+    Diag_DescribeStatus(status, stStr, elCount(stStr));
+    write(
+      "[UDS] DTC#%d: %s raw=0x%02X%02X%02X status: %s",
+      dtcCount + 1, dtcStr, dtcB0, dtcB1, dtcB2, stStr
+    );
+    dtcCount++;
+  }
+
+  if (dtcCount == 0)
+    write("[UDS] No DTC matched mask 0x%02X", DTC_STATUS_MASK);
+  else
+    write("[UDS] Total DTC count: %d", dtcCount);
+}
+
+void Diag_ParseUdsPayload(void)
+{
+  if (udsRxLen < 1)
+  {
+    write("[UDS] Empty UDS payload");
+    return;
+  }
+  if (udsRxBuf[0] == 0x7F)
+  {
+    Diag_ParseNegativeResponse();
+    return;
+  }
+  if (udsRxBuf[0] == 0x59 && udsRxLen >= 2 && udsRxBuf[1] == 0x02)
+  {
+    Diag_ParseReadDtcByStatusMask();
+    return;
+  }
+  write("[UDS] Unhandled positive SID=0x%02X", udsRxBuf[0]);
+}
+
+void Diag_OnTpComplete(void)
+{
+  write("[UDS] Rx complete, UDS len=%d", udsRxLen);
+  Diag_ParseUdsPayload();
+  Diag_ResetTpRx();
+}
+
+void Diag_AppendTpBytes(byte data[], long off, long len)
+{
+  long i;
+  for (i = 0; i < len && udsRxIdx < UDS_BUF_SIZE; i++)
+  {
+    udsRxBuf[udsRxIdx] = data[off + i];
+    udsRxIdx++;
+  }
+}
+
+on start
+{
+  Diag_ResetTpRx();
+  write("[UDS] Ready. Set diagnosticButton=1 to send 19 02 09");
+}
+
+on sysvar sysvar::diagnosticButton
+{
+  if (@sysvar::diagnosticButton == 1)
+  {
+    Diag_SendReadDtc_19_02_09();
+    @sysvar::diagnosticButton = 0;
+  }
+}
+
+on message diagResp
+{
+  byte pci;
+  long sfLen;
+  long totalLen;
+  long i;
+  long dataOff;
+  long copyLen;
+  byte seq;
+
+  pci = this.byte(0);
+
+  /* 单帧 */
+  if ((pci & 0xF0) == 0x00)
+  {
+    sfLen = pci & 0x0F;
+    if (sfLen < 1)
+      return;
+    Diag_ResetTpRx();
+    for (i = 0; i < sfLen && i < 7; i++)
+      udsRxBuf[i] = this.byte(1 + i);
+    udsRxLen = sfLen;
+    udsRxIdx = sfLen;
+    Diag_OnTpComplete();
+    return;
+  }
+
+  /* 首帧 */
+  if ((pci & 0xF0) == 0x10)
+  {
+    totalLen = ((pci & 0x0F) << 8) | (this.byte(1) & 0xFF);
+    if (totalLen <= 0 || totalLen > UDS_BUF_SIZE)
+    {
+      write("[UDS] FF invalid totalLen=%d", totalLen);
+      return;
+    }
+    Diag_ResetTpRx();
+    udsRxLen = totalLen;
+    tpRxActive = 1;
+    tpExpectSeq = 1;
+    copyLen = 6;
+    if (copyLen > totalLen)
+      copyLen = totalLen;
+    for (i = 0; i < copyLen; i++)
+      udsRxBuf[i] = this.byte(2 + i);
+    udsRxIdx = copyLen;
+    Diag_SendFlowControlContinue();
+    return;
+  }
+
+  /* 连续帧 */
+  if ((pci & 0xF0) == 0x20 && tpRxActive)
+  {
+    seq = pci & 0x0F;
+    if (seq != tpExpectSeq)
+    {
+      write("[UDS] CF seq mismatch expect=%d got=%d", tpExpectSeq, seq);
+      Diag_ResetTpRx();
+      return;
+    }
+    tpExpectSeq = (tpExpectSeq + 1) & 0x0F;
+    if (tpExpectSeq == 0)
+      tpExpectSeq = 1;
+
+    dataOff = 1;
+    copyLen = 7;
+    if (udsRxIdx + copyLen > udsRxLen)
+      copyLen = udsRxLen - udsRxIdx;
+    for (i = 0; i < copyLen; i++)
+      udsRxBuf[udsRxIdx + i] = this.byte(dataOff + i);
+    udsRxIdx += copyLen;
+
+    if (udsRxIdx >= udsRxLen)
+      Diag_OnTpComplete();
+    return;
+  }
+}
