@@ -635,9 +635,8 @@ void Diag_ParsePositiveReadDtcFull(long ecuIdx)
   else
     write("  record format: 4 bytes per DTC (3 DTC + 0 FT + 1 status)");
   Diag_ParseDtcRecords(ecuIdx, off, recordSize);
+  write("[VDS-Diag] ===== End Full Parse =====");
 }
-
-void Diag_ParseFullResult(long ecuIdx, long rxId)
 {
   Diag_SetLastRxMeta(ecuIdx, rxId);
   write("[VDS-Diag] ===== ");
