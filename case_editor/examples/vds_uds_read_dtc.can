@@ -56,6 +56,8 @@ variables
   long    udsRxIdx[10];
   byte    tpExpectSeq[10];
   long    tpRxActive[10];
+
+  byte    diagRxData[8];
 }
 
 void Diag_ResetTpRx(long ecuIdx)
@@ -637,6 +639,8 @@ void Diag_ParsePositiveReadDtcFull(long ecuIdx)
   Diag_ParseDtcRecords(ecuIdx, off, recordSize);
   write("[VDS-Diag] ===== End Full Parse =====");
 }
+
+void Diag_ParseFullResult(long ecuIdx, long rxId)
 {
   Diag_SetLastRxMeta(ecuIdx, rxId);
   write("[VDS-Diag] ===== ");
@@ -688,7 +692,7 @@ void Diag_OnRxMessage(long ecuIdx, long rxId)
   long copyLen;
   byte seq;
 
-  pci = this.byte(0);
+  pci = diagRxData[0];
 
   if ((pci & 0xF0) == 0x00)
   {
@@ -697,7 +701,7 @@ void Diag_OnRxMessage(long ecuIdx, long rxId)
       return;
     Diag_ResetTpRx(ecuIdx);
     for (i = 0; i < sfLen && i < 7; i++)
-      udsRxBuf[ecuIdx][i] = this.byte(1 + i);
+      udsRxBuf[ecuIdx][i] = diagRxData[1 + i];
     udsRxLen[ecuIdx] = sfLen;
     udsRxIdx[ecuIdx] = sfLen;
     Diag_OnTpComplete(ecuIdx, rxId);
@@ -706,7 +710,7 @@ void Diag_OnRxMessage(long ecuIdx, long rxId)
 
   if ((pci & 0xF0) == 0x10)
   {
-    totalLen = ((pci & 0x0F) << 8) | (this.byte(1) & 0xFF);
+    totalLen = ((pci & 0x0F) << 8) | (diagRxData[1] & 0xFF);
     if (totalLen <= 0 || totalLen > UDS_BUF_SIZE)
       return;
     Diag_ResetTpRx(ecuIdx);
@@ -717,7 +721,7 @@ void Diag_OnRxMessage(long ecuIdx, long rxId)
     if (copyLen > totalLen)
       copyLen = totalLen;
     for (i = 0; i < copyLen; i++)
-      udsRxBuf[ecuIdx][i] = this.byte(2 + i);
+      udsRxBuf[ecuIdx][i] = diagRxData[2 + i];
     udsRxIdx[ecuIdx] = copyLen;
     Diag_SendFlowControlForEcu(ecuIdx);
     return;
@@ -739,7 +743,7 @@ void Diag_OnRxMessage(long ecuIdx, long rxId)
     if (udsRxIdx[ecuIdx] + copyLen > udsRxLen[ecuIdx])
       copyLen = udsRxLen[ecuIdx] - udsRxIdx[ecuIdx];
     for (i = 0; i < copyLen; i++)
-      udsRxBuf[ecuIdx][udsRxIdx[ecuIdx] + i] = this.byte(1 + i);
+      udsRxBuf[ecuIdx][udsRxIdx[ecuIdx] + i] = diagRxData[1 + i];
     udsRxIdx[ecuIdx] += copyLen;
     if (udsRxIdx[ecuIdx] >= udsRxLen[ecuIdx])
       Diag_OnTpComplete(ecuIdx, rxId);
@@ -817,10 +821,13 @@ on timer tmr_diag_poll
 on message *
 {
   long ecuIdx;
+  long i;
   if (this.CAN != DIAG_CAN_CH)
     return;
   ecuIdx = Diag_RxIdToEcuIdx(this.id);
   if (ecuIdx < 0)
     return;
+  for (i = 0; i < 8; i++)
+    diagRxData[i] = this.byte(i);
   Diag_OnRxMessage(ecuIdx, this.id);
 }
