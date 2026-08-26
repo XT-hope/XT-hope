@@ -158,6 +158,167 @@ void Diag_DescribeNrc(byte nrc, char out[], long outSize)
   }
 }
 
+/* 将 DTC 状态字节翻译为中文短语（仅列出置位的含义） */
+void Diag_WriteDtcStatusCn(byte st)
+{
+  long any;
+  any = 0;
+  write("      状态中文:");
+  if ((st & 0x01) != 0) { write(" 当前测试失败"); any = 1; }
+  if ((st & 0x02) != 0) { write(" 本周期测试失败"); any = 1; }
+  if ((st & 0x04) != 0) { write(" 待确认"); any = 1; }
+  if ((st & 0x08) != 0) { write(" 已确认"); any = 1; }
+  if ((st & 0x10) != 0) { write(" 自清除后测试未完成"); any = 1; }
+  if ((st & 0x20) != 0) { write(" 自清除后仍测试失败"); any = 1; }
+  if ((st & 0x40) != 0) { write(" 故障灯(MIL)请求点亮"); any = 1; }
+  if ((st & 0x80) != 0) { write(" 位7=1"); any = 1; }
+  if (any == 0)
+    write(" 无激活状态(正常/已恢复)");
+}
+
+void Diag_WriteMaskFilterCn(byte mask)
+{
+  long any;
+  any = 0;
+  write("      筛选条件:");
+  if ((mask & 0x01) != 0) { write(" [测试失败]"); any = 1; }
+  if ((mask & 0x02) != 0) { write(" [本周期测试失败]"); any = 1; }
+  if ((mask & 0x04) != 0) { write(" [待确认]"); any = 1; }
+  if ((mask & 0x08) != 0) { write(" [已确认]"); any = 1; }
+  if ((mask & 0x10) != 0) { write(" [自清除后未完成]"); any = 1; }
+  if ((mask & 0x20) != 0) { write(" [自清除后失败]"); any = 1; }
+  if ((mask & 0x40) != 0) { write(" [MIL相关]"); any = 1; }
+  if (any == 0)
+    write(" 无筛选位");
+}
+
+void Diag_FormatDtcDomainCn(byte b0, char out[], long outSize)
+{
+  switch ((b0 >> 6) & 0x03)
+  {
+    case 0: snprintf(out, outSize, "动力系统"); break;
+    case 1: snprintf(out, outSize, "底盘系统"); break;
+    case 2: snprintf(out, outSize, "车身系统"); break;
+    default: snprintf(out, outSize, "网络通信"); break;
+  }
+}
+
+/*
+ * 将如 59 02 09 FF 04 11 00 09 ... 的十六进制载荷逐段翻译成中文说明
+ */
+void Diag_PrintReadDtcChineseExplain(long ecuIdx)
+{
+  long off;
+  long payloadLen;
+  long recordSize;
+  long idx;
+  byte dtcB0, dtcB1, dtcB2, failType, status;
+  char dtcStr[16];
+  char domainCn[24];
+
+  write("  --- 十六进制载荷中文释义 ---");
+  write("  整段数据按 UDS 读DTC(19 02) 正响应格式解读，示例如:");
+  write("  59 02 09 FF | 04 11 00 09 | 13 02 00 08");
+
+  if (udsRxLen[ecuIdx] < 1)
+  {
+    write("  (无数据)");
+    write("  --- 中文释义结束 ---");
+    return;
+  }
+
+  if (udsRxBuf[ecuIdx][0] == 0x59)
+    write("  [59] 读DTC信息服务正响应(请求服务0x19 的回显+0x40，表示读取成功)");
+  else
+    write("  [%02X] 服务标识字节", udsRxBuf[ecuIdx][0]);
+
+  if (udsRxLen[ecuIdx] >= 2)
+  {
+    if (udsRxBuf[ecuIdx][1] == 0x02)
+      write("  [02] 子功能: 按DTC状态掩码上报故障码列表");
+    else
+      write("  [%02X] 子功能/报告类型字节", udsRxBuf[ecuIdx][1]);
+  }
+
+  if (udsRxLen[ecuIdx] >= 3)
+  {
+    write("  [%02X] 状态掩码回显(与请求中掩码一致，表示按哪些状态筛选DTC)", udsRxBuf[ecuIdx][2]);
+    Diag_WriteMaskFilterCn(udsRxBuf[ecuIdx][2]);
+  }
+
+  if (udsRxLen[ecuIdx] >= 4)
+  {
+    write("  [%02X] DTC状态可用性掩码(ECU能报告哪些状态位)", udsRxBuf[ecuIdx][3]);
+    Diag_WriteMaskFilterCn(udsRxBuf[ecuIdx][3]);
+    off = 4;
+  }
+  else
+    off = 3;
+
+  payloadLen = udsRxLen[ecuIdx] - off;
+  if (payloadLen <= 0)
+  {
+    write("  (后续无故障记录，仅返回包头)");
+    write("  --- 中文释义结束 ---");
+    return;
+  }
+
+  if (payloadLen % 5 == 0)
+    recordSize = 5;
+  else if (payloadLen % 4 == 0)
+    recordSize = 4;
+  else
+    recordSize = 4;
+
+  write("  --- 故障记录区 (每条 %d 字节) ---", recordSize);
+  idx = 0;
+  while (off + recordSize - 1 < udsRxLen[ecuIdx])
+  {
+    dtcB0 = udsRxBuf[ecuIdx][off];
+    dtcB1 = udsRxBuf[ecuIdx][off + 1];
+    dtcB2 = udsRxBuf[ecuIdx][off + 2];
+    if (recordSize == 5)
+    {
+      failType = udsRxBuf[ecuIdx][off + 3];
+      status = udsRxBuf[ecuIdx][off + 4];
+      write(
+        "  [%02X %02X %02X %02X %02X] 故障记录#%d",
+        dtcB0, dtcB1, dtcB2, failType, status, idx + 1
+      );
+    }
+    else
+    {
+      failType = dtcB2 & 0x0F;
+      status = udsRxBuf[ecuIdx][off + 3];
+      write(
+        "  [%02X %02X %02X %02X] 故障记录#%d",
+        dtcB0, dtcB1, dtcB2, status, idx + 1
+      );
+    }
+
+    Diag_FormatDtcCode(dtcB0, dtcB1, dtcB2, dtcStr, elCount(dtcStr));
+    Diag_FormatDtcDomainCn(dtcB0, domainCn, elCount(domainCn));
+    write(
+      "      故障码: %s (%s, 原始三字节 0x%02X%02X%02X)",
+      dtcStr, domainCn, dtcB0, dtcB1, dtcB2
+    );
+    write("      说明: 具体故障现象请对照主机厂DTC定义表");
+    if (recordSize == 5)
+      write("      故障类型字节: 0x%02X", failType);
+    write("      状态字节: 0x%02X", status);
+    Diag_WriteDtcStatusCn(status);
+    off += recordSize;
+    idx++;
+  }
+
+  if (idx == 0)
+    write("  (未解析出完整故障记录)");
+  else
+    write("  共解读 %d 条故障记录", idx);
+
+  write("  --- 中文释义结束 ---");
+}
+
 void Diag_SendTpSingle_19_02_09(long ecuIdx)
 {
   switch (ecuIdx)
@@ -516,6 +677,17 @@ void Diag_ParseNegativeFull(long ecuIdx)
   char nrcDesc[48];
   write("[VDS-Diag] ===== 否定响应 =====");
   Diag_PrintFullUdsHex(ecuIdx);
+  write("  --- 否定响应中文释义 ---");
+  if (udsRxLen[ecuIdx] >= 1 && udsRxBuf[ecuIdx][0] == 0x7F)
+    write("  [7F] 这是一条UDS否定响应，请求未被执行");
+  if (udsRxLen[ecuIdx] >= 2)
+    write("  [%02X] 被拒绝的请求服务ID", udsRxBuf[ecuIdx][1]);
+  if (udsRxLen[ecuIdx] >= 3)
+  {
+    Diag_DescribeNrc(udsRxBuf[ecuIdx][2], nrcDesc, elCount(nrcDesc));
+    write("  [%02X] 否定原因: %s", udsRxBuf[ecuIdx][2], nrcDesc);
+  }
+  write("  --- 否定响应中文释义结束 ---");
   if (udsRxLen[ecuIdx] >= 1)
     write("  [0] 否定响应SID     = 0x%02X", udsRxBuf[ecuIdx][0]);
   if (udsRxLen[ecuIdx] >= 2)
@@ -588,6 +760,7 @@ void Diag_ParsePositiveReadDtcFull(long ecuIdx)
 
   write("[VDS-Diag] ===== 读DTC正响应完整解析 =====");
   Diag_PrintFullUdsHex(ecuIdx);
+  Diag_PrintReadDtcChineseExplain(ecuIdx);
 
   if (udsRxLen[ecuIdx] < 3)
   {
