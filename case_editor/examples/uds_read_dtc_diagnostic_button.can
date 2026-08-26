@@ -19,15 +19,12 @@
 
 variables
 {
-  #define DIAG_CAN_CH           1
-  #define DIAG_REQ_ID           0x7E0
-  #define DIAG_RESP_ID          0x7E8
-  #define DTC_STATUS_MASK       0x09
-
-  message DIAG_REQ_ID diagReq;
-  message DIAG_RESP_ID diagResp;
-
+  const long DIAG_CAN_CH = 1;
+  const byte DTC_STATUS_MASK = 0x09;
   const long UDS_BUF_SIZE = 4096;
+
+  message 0x7E0 diagReq;
+  message 0x7E8 diagResp;
   byte udsRxBuf[4096];
   long udsRxLen;
   long udsRxIdx;
@@ -319,8 +316,10 @@ void Diag_ParseReadDtcByStatusMask(void)
     write("  warning: payload not aligned to 4 or 5 bytes per DTC, try 4-byte records");
   }
 
-  write("  record format: %d bytes per DTC (3 DTC + %s + 1 status)",
-    recordSize, recordSize == 5 ? "1 FT" : "0 FT");
+  if (recordSize == 5)
+    write("  record format: 5 bytes per DTC (3 DTC + 1 FT + 1 status)");
+  else
+    write("  record format: 4 bytes per DTC (3 DTC + 0 FT + 1 status)");
   Diag_ParseDtcRecords(off, recordSize);
   write("[UDS] ===== End Full Parse =====");
 }

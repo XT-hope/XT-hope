@@ -28,12 +28,12 @@
 
 variables
 {
-  #define DIAG_CAN_CH           2
-  #define DTC_STATUS_MASK       0x09
-  #define DIAG_ECU_COUNT        10
-  #define DIAG_FUNC_TARGET      10
-  #define DIAG_ALL_TARGET       255
-  #define UDS_BUF_SIZE          1024
+  const long DIAG_CAN_CH = 2;
+  const byte DTC_STATUS_MASK = 0x09;
+  const long DIAG_ECU_COUNT = 10;
+  const long DIAG_FUNC_TARGET = 10;
+  const long DIAG_ALL_TARGET = 255;
+  const long UDS_BUF_SIZE = 1024;
 
   message 0x712 msg_ADC_0x712;
   message 0x760 msg_LFCR_0x760;
@@ -51,11 +51,11 @@ variables
   long    diagPollIdx;
   long    diagPollActive;
 
-  byte    udsRxBuf[DIAG_ECU_COUNT][UDS_BUF_SIZE];
-  long    udsRxLen[DIAG_ECU_COUNT];
-  long    udsRxIdx[DIAG_ECU_COUNT];
-  byte    tpExpectSeq[DIAG_ECU_COUNT];
-  long    tpRxActive[DIAG_ECU_COUNT];
+  byte    udsRxBuf[10][1024];
+  long    udsRxLen[10];
+  long    udsRxIdx[10];
+  byte    tpExpectSeq[10];
+  long    tpRxActive[10];
 }
 
 void Diag_ResetTpRx(long ecuIdx)
@@ -630,10 +630,11 @@ void Diag_ParsePositiveReadDtcFull(long ecuIdx)
     write("  warning: payload not aligned to 4 or 5 bytes per DTC, try 4-byte records");
   }
 
-  write("  record format: %d bytes per DTC (3 DTC + %s + 1 status)",
-    recordSize, recordSize == 5 ? "1 FT" : "0 FT");
+  if (recordSize == 5)
+    write("  record format: 5 bytes per DTC (3 DTC + 1 FT + 1 status)");
+  else
+    write("  record format: 4 bytes per DTC (3 DTC + 0 FT + 1 status)");
   Diag_ParseDtcRecords(ecuIdx, off, recordSize);
-  write("[VDS-Diag] ===== End Full Parse =====");
 }
 
 void Diag_ParseFullResult(long ecuIdx, long rxId)
