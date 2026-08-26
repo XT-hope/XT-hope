@@ -148,13 +148,13 @@ void Diag_DescribeNrc(byte nrc, char out[], long outSize)
 {
   switch (nrc)
   {
-    case 0x12: snprintf(out, outSize, "subFunctionNotSupported"); break;
-    case 0x13: snprintf(out, outSize, "incorrectMessageLength"); break;
-    case 0x22: snprintf(out, outSize, "conditionsNotCorrect"); break;
-    case 0x31: snprintf(out, outSize, "requestOutOfRange"); break;
-    case 0x33: snprintf(out, outSize, "securityAccessDenied"); break;
-    case 0x78: snprintf(out, outSize, "responsePending"); break;
-    default:   snprintf(out, outSize, "NRC"); break;
+    case 0x12: snprintf(out, outSize, "子功能不支持"); break;
+    case 0x13: snprintf(out, outSize, "报文长度或格式错误"); break;
+    case 0x22: snprintf(out, outSize, "条件不满足"); break;
+    case 0x31: snprintf(out, outSize, "请求超出范围"); break;
+    case 0x33: snprintf(out, outSize, "安全访问拒绝"); break;
+    case 0x78: snprintf(out, outSize, "响应挂起"); break;
+    default:   snprintf(out, outSize, "否定响应码"); break;
   }
 }
 
@@ -414,7 +414,7 @@ void Diag_SendFlowControlForEcu(long ecuIdx)
 
 void Diag_SendReadDtcOnEcu(long ecuIdx)
 {
-  write("[VDS-Diag] Tx ");
+  write("[VDS-Diag] 发送 ");
   Diag_WriteEcuLabel(ecuIdx);
   write(" 19 02 %02X", DTC_STATUS_MASK);
   Diag_SendTpSingle_19_02_09(ecuIdx);
@@ -423,7 +423,7 @@ void Diag_SendReadDtcOnEcu(long ecuIdx)
 void Diag_SendFunctional(void)
 {
   long i;
-  write("[VDS-Diag] Tx Func_7DF 19 02 %02X", DTC_STATUS_MASK);
+  write("[VDS-Diag] 发送 功能寻址7DF 19 02 %02X", DTC_STATUS_MASK);
   for (i = 0; i < DIAG_ECU_COUNT; i++)
     Diag_ResetTpRx(i);
   msg_VDS_0x7DF.CAN = DIAG_CAN_CH;
@@ -442,8 +442,8 @@ void Diag_DescribeStatusFull(byte st, char out[], long outSize)
 {
   snprintf(
     out, outSize,
-    "bit0:testFailed=%d bit1:testFailedThisCycle=%d bit2:pending=%d bit3:confirmed=%d "
-    "bit4:!completedSinceClear=%d bit5:!completedThisCycle=%d bit6:MIL=%d bit7=%d raw=0x%02X",
+    "bit0:测试失败=%d bit1:本周期测试失败=%d bit2:待确认=%d bit3:已确认=%d "
+    "bit4:自清除后未完成=%d bit5:自清除后仍失败=%d bit6:MIL灯=%d bit7=%d 原始=0x%02X",
     (st & 0x01) != 0,
     (st & 0x02) != 0,
     (st & 0x04) != 0,
@@ -459,7 +459,7 @@ void Diag_DescribeStatusFull(byte st, char out[], long outSize)
 void Diag_DescribeAvailMask(byte mask)
 {
   write(
-    "    AvailMask bits: TF=%d TFCycle=%d Pend=%d Conf=%d !SinceClr=%d !ThisCycle=%d MIL=%d reserved=%d raw=0x%02X",
+    "    可用掩码: 测试失败=%d 本周期失败=%d 待确认=%d 已确认=%d 自清除后未完成=%d 自清除后失败=%d MIL=%d 保留=%d 原始=0x%02X",
     (mask & 0x01) != 0,
     (mask & 0x02) != 0,
     (mask & 0x04) != 0,
@@ -476,7 +476,7 @@ void Diag_PrintFullUdsHex(long ecuIdx)
 {
   long i;
   long lineStart;
-  write("  --- UDS payload (complete, %d bytes) ---", udsRxLen[ecuIdx]);
+  write("  --- UDS完整载荷 (%d 字节) ---", udsRxLen[ecuIdx]);
   lineStart = 0;
   while (lineStart < udsRxLen[ecuIdx])
   {
@@ -502,7 +502,7 @@ void Diag_PrintFullUdsHex(long ecuIdx)
     );
     lineStart += 16;
   }
-  write("  --- end UDS payload ---");
+  write("  --- UDS载荷结束 ---");
 }
 
 void Diag_SetLastRxMeta(long ecuIdx, long rxId)
@@ -514,18 +514,18 @@ void Diag_SetLastRxMeta(long ecuIdx, long rxId)
 void Diag_ParseNegativeFull(long ecuIdx)
 {
   char nrcDesc[48];
-  write("[VDS-Diag] ===== Negative Response =====");
+  write("[VDS-Diag] ===== 否定响应 =====");
   Diag_PrintFullUdsHex(ecuIdx);
   if (udsRxLen[ecuIdx] >= 1)
-    write("  [0] NegativeResponseSID   = 0x%02X", udsRxBuf[ecuIdx][0]);
+    write("  [0] 否定响应SID     = 0x%02X", udsRxBuf[ecuIdx][0]);
   if (udsRxLen[ecuIdx] >= 2)
-    write("  [1] RequestedSID          = 0x%02X", udsRxBuf[ecuIdx][1]);
+    write("  [1] 被请求SID       = 0x%02X", udsRxBuf[ecuIdx][1]);
   if (udsRxLen[ecuIdx] >= 3)
   {
     Diag_DescribeNrc(udsRxBuf[ecuIdx][2], nrcDesc, elCount(nrcDesc));
-    write("  [2] NRC                   = 0x%02X (%s)", udsRxBuf[ecuIdx][2], nrcDesc);
+    write("  [2] NRC否定码       = 0x%02X (%s)", udsRxBuf[ecuIdx][2], nrcDesc);
   }
-  write("[VDS-Diag] ===== End Negative =====");
+  write("[VDS-Diag] ===== 否定响应结束 =====");
 }
 
 void Diag_ParseDtcRecords(long ecuIdx, long off, long recordSize)
@@ -556,17 +556,17 @@ void Diag_ParseDtcRecords(long ecuIdx, long off, long recordSize)
     Diag_FormatDtcCode(dtcB0, dtcB1, dtcB2, dtcStr, elCount(dtcStr));
     Diag_DescribeStatusFull(status, stStr, elCount(stStr));
     write(
-      "  DTC#%d code=%s rawDTC=0x%02X%02X%02X failureType=0x%02X",
+      "  DTC#%d 故障码=%s 原始DTC=0x%02X%02X%02X 故障类型=0x%02X",
       dtcCount + 1, dtcStr, dtcB0, dtcB1, dtcB2, failType
     );
-    write("         status: %s", stStr);
+    write("         状态: %s", stStr);
     dtcCount++;
   }
 
   diagLastDtcCount = dtcCount;
   if (off < udsRxLen[ecuIdx])
   {
-    write("  trailing bytes (%d):", udsRxLen[ecuIdx] - off);
+    write("  尾部剩余字节 (%d):", udsRxLen[ecuIdx] - off);
     while (off < udsRxLen[ecuIdx])
     {
       write("    [%d] = 0x%02X", off, udsRxBuf[ecuIdx][off]);
@@ -574,9 +574,9 @@ void Diag_ParseDtcRecords(long ecuIdx, long off, long recordSize)
     }
   }
   if (dtcCount == 0)
-    write("  (no DTC records in payload)");
+    write("  (载荷中无DTC记录)");
   else
-    write("  total DTC records: %d", dtcCount);
+    write("  DTC记录总数: %d", dtcCount);
 }
 
 void Diag_ParsePositiveReadDtcFull(long ecuIdx)
@@ -586,41 +586,41 @@ void Diag_ParsePositiveReadDtcFull(long ecuIdx)
   long recordSize;
   byte availMask;
 
-  write("[VDS-Diag] ===== Positive ReadDTC Full Parse =====");
+  write("[VDS-Diag] ===== 读DTC正响应完整解析 =====");
   Diag_PrintFullUdsHex(ecuIdx);
 
   if (udsRxLen[ecuIdx] < 3)
   {
-    write("  payload too short for ReadDTC parse");
-    write("[VDS-Diag] ===== End =====");
+    write("  载荷过短，无法解析读DTC");
+    write("[VDS-Diag] ===== 解析结束 =====");
     return;
   }
 
-  write("  [0] PositiveResponseSID   = 0x%02X (ReadDTCInformation+0x40)", udsRxBuf[ecuIdx][0]);
-  write("  [1] ReportType            = 0x%02X (reportDTCByStatusMask)", udsRxBuf[ecuIdx][1]);
-  write("  [2] StatusMaskEcho        = 0x%02X", udsRxBuf[ecuIdx][2]);
+  write("  [0] 正响应SID         = 0x%02X (读DTC信息服务+0x40)", udsRxBuf[ecuIdx][0]);
+  write("  [1] 报告类型          = 0x%02X (按状态掩码报告DTC)", udsRxBuf[ecuIdx][1]);
+  write("  [2] 状态掩码回显      = 0x%02X", udsRxBuf[ecuIdx][2]);
 
   if (udsRxLen[ecuIdx] >= 4)
   {
     availMask = udsRxBuf[ecuIdx][3];
-    write("  [3] DTCStatusAvailabilityMask = 0x%02X", availMask);
+    write("  [3] DTC状态可用性掩码 = 0x%02X", availMask);
     Diag_DescribeAvailMask(availMask);
     off = 4;
   }
   else
   {
     off = 3;
-    write("  (no availability mask byte)");
+    write("  (无可用性掩码字节)");
   }
 
   payloadLen = udsRxLen[ecuIdx] - off;
-  write("  DTC data region: offset=%d length=%d bytes", off, payloadLen);
+  write("  DTC数据区: 偏移=%d 长度=%d 字节", off, payloadLen);
 
   if (payloadLen <= 0)
   {
-    write("  (no DTC data after header)");
+    write("  (包头后无DTC数据)");
     diagLastDtcCount = 0;
-    write("[VDS-Diag] ===== End =====");
+    write("[VDS-Diag] ===== 解析结束 =====");
     return;
   }
 
@@ -632,15 +632,15 @@ void Diag_ParsePositiveReadDtcFull(long ecuIdx)
   else
   {
     recordSize = 4;
-    write("  warning: payload not aligned to 4 or 5 bytes per DTC, try 4-byte records");
+    write("  警告: 载荷与4/5字节DTC记录不对齐，按4字节解析");
   }
 
   if (recordSize == 5)
-    write("  record format: 5 bytes per DTC (3 DTC + 1 FT + 1 status)");
+    write("  记录格式: 每条5字节 (3字节DTC + 1字节故障类型 + 1字节状态)");
   else
-    write("  record format: 4 bytes per DTC (3 DTC + 0 FT + 1 status)");
+    write("  记录格式: 每条4字节 (3字节DTC + 1字节状态)");
   Diag_ParseDtcRecords(ecuIdx, off, recordSize);
-  write("[VDS-Diag] ===== End Full Parse =====");
+  write("[VDS-Diag] ===== 完整解析结束 =====");
 }
 
 void Diag_ParseFullResult(long ecuIdx, long rxId)
@@ -648,11 +648,11 @@ void Diag_ParseFullResult(long ecuIdx, long rxId)
   Diag_SetLastRxMeta(ecuIdx, rxId);
   write("[VDS-Diag] ===== ");
   Diag_WriteEcuLabel(ecuIdx);
-  write(" Rx ID=0x%X UDS len=%d =====", rxId, udsRxLen[ecuIdx]);
+  write(" 接收 ID=0x%X UDS长度=%d =====", rxId, udsRxLen[ecuIdx]);
 
   if (udsRxLen[ecuIdx] < 1)
   {
-    write("  empty UDS payload");
+    write("  UDS载荷为空");
     return;
   }
 
@@ -669,10 +669,10 @@ void Diag_ParseFullResult(long ecuIdx, long rxId)
   }
 
   /* 其它正响应：仍打印完整十六进制并按字节标注 */
-  write("[VDS-Diag] ===== Generic Positive / Unknown Service =====");
+  write("[VDS-Diag] ===== 其它正响应/未知服务 =====");
   Diag_PrintFullUdsHex(ecuIdx);
-  write("  [0] SID = 0x%02X", udsRxBuf[ecuIdx][0]);
-  write("[VDS-Diag] ===== End =====");
+  write("  [0] 服务SID = 0x%02X", udsRxBuf[ecuIdx][0]);
+  write("[VDS-Diag] ===== 解析结束 =====");
 }
 
 void Diag_ParseUdsPayload(long ecuIdx, long rxId)
@@ -735,7 +735,7 @@ void Diag_OnRxMessage(long ecuIdx, long rxId)
     seq = pci & 0x0F;
     if (seq != tpExpectSeq[ecuIdx])
     {
-      write("[VDS-Diag] CF seq error ecu=%d", ecuIdx);
+      write("[VDS-Diag] 连续帧序号错误 ecu=%d", ecuIdx);
       Diag_ResetTpRx(ecuIdx);
       return;
     }
@@ -781,7 +781,7 @@ void Diag_StartRequest(long target)
     Diag_SendToEcuIndex(target);
     return;
   }
-  write("[VDS-Diag] diagnosticTarget=%d invalid (0~9, 10, 255)", target);
+  write("[VDS-Diag] diagnosticTarget=%d 无效 (0~9, 10, 255)", target);
 }
 
 on start
@@ -789,7 +789,7 @@ on start
   Diag_ResetAllTpRx();
   diagPollIdx = 0;
   diagPollActive = 0;
-  write("[VDS-Diag] Ready. target: 0=ADC..9=RRCR, 10=7DF, 255=all");
+  write("[VDS-Diag] 就绪。target: 0=ADC..9=RRCR, 10=7DF功能寻址, 255=轮询全部");
 }
 
 on sysvar sysvar::diagnosticButton
@@ -813,7 +813,7 @@ on timer tmr_diag_poll
   if (diagPollIdx >= DIAG_ECU_COUNT)
   {
     diagPollActive = 0;
-    write("[VDS-Diag] poll all ECUs finished");
+    write("[VDS-Diag] 全部ECU轮询完成");
     return;
   }
   Diag_SendToEcuIndex(diagPollIdx);
