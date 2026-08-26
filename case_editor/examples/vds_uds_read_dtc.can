@@ -26,15 +26,15 @@
  * 默认 CAN 通道 DIAG_CAN_CH=2，按工程修改。
  */
 
-#define DIAG_CAN_CH           2
-#define DTC_STATUS_MASK       0x09
-#define DIAG_ECU_COUNT        10
-#define DIAG_FUNC_TARGET      10
-#define DIAG_ALL_TARGET       255
-#define UDS_BUF_SIZE          1024
-
 variables
 {
+  #define DIAG_CAN_CH           2
+  #define DTC_STATUS_MASK       0x09
+  #define DIAG_ECU_COUNT        10
+  #define DIAG_FUNC_TARGET      10
+  #define DIAG_ALL_TARGET       255
+  #define UDS_BUF_SIZE          1024
+
   message 0x712 msg_ADC_0x712;
   message 0x760 msg_LFCR_0x760;
   message 0x736 msg_Lidar_0x736;

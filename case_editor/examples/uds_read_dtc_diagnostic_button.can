@@ -17,13 +17,13 @@
  * 若变量在命名空间 MyNs 下，将 on sysvar 改为 on sysvar MyNs::diagnosticButton
  */
 
-#define DIAG_CAN_CH           1
-#define DIAG_REQ_ID           0x7E0
-#define DIAG_RESP_ID          0x7E8
-#define DTC_STATUS_MASK       0x09
-
 variables
 {
+  #define DIAG_CAN_CH           1
+  #define DIAG_REQ_ID           0x7E0
+  #define DIAG_RESP_ID          0x7E8
+  #define DTC_STATUS_MASK       0x09
+
   message DIAG_REQ_ID diagReq;
   message DIAG_RESP_ID diagResp;
 
