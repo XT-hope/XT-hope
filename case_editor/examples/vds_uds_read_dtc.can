@@ -1,0 +1,676 @@
+/*@!Encoding:65001*/
+/*
+ * VDS 节点 UDS 诊断 CAPL
+ *
+ * 按 DBC 中 VDS 诊断 ID 对发送 19 02 09，在响应 ID 上解析 59 02 09。
+ *
+ * Tx (VDS 发)  -> Rx (VDS 收)     DBC 信号（单信号承载 8 字节诊断数据）
+ * 0x712 ADC    -> 0x71A           ADC_Diag_712_S / ADC_Diag_71A_S
+ * 0x760 LFCR   -> 0x768           MRR_Diag_0x760_S / MRR_Diag_0x768_S
+ * 0x736 Lidar  -> 0x73E           Lidar_Diag_0x736_S / Lidar_Diag_0x73E_S
+ * 0x757 Lidar  -> 0x75F           Lidar_Diag_0x757_S / Lidar_Diag_0x75F_S
+ * 0x784 Lidar  -> 0x78C           Lidar_Diag_0x784_S / MRR_Diag_0x78C_S
+ * 0x7D4 LRCR   -> 0x7DC           MRR_Diag_0x7D4_S / MRR_Diag_0x7DC_S
+ * 0x7F2 MRR    -> 0x7FA           MRR_Diag_0x7F2_S / MRR_Diag_0x7FA_S
+ * 0x701 PAS    -> 0x709           PAS_Diag_0x701_S / PAS_Diag_0x709_S
+ * 0x761 RFCR   -> 0x769           MRR_Diag_0x761_S / MRR_Diag_0x769_S
+ * 0x7C2 RRCR   -> 0x7CA           MRR_Diag_0x7C2_S / MRR_Diag_0x7CA_S
+ * 0x7DF Func   -> 各物理响应 ID   ADC_Diag_0x7DF_S
+ *
+ * 系统变量：
+ *   diagnosticButton  int  1=触发
+ *   diagnosticTarget  int  0~9 单 ECU，10=0x7DF，255=轮询全部物理 ECU
+ *
+ * 默认 CAN 通道 DIAG_CAN_CH=2，按工程修改。
+ */
+
+#define DIAG_CAN_CH           2
+#define DTC_STATUS_MASK       0x09
+#define DIAG_ECU_COUNT        10
+#define DIAG_FUNC_TARGET      10
+#define DIAG_ALL_TARGET       255
+#define UDS_BUF_SIZE          1024
+
+variables
+{
+  message 0x712 msg_ADC_0x712;
+  message 0x760 msg_LFCR_0x760;
+  message 0x736 msg_Lidar_0x736;
+  message 0x757 msg_Lidar_0x757;
+  message 0x784 msg_Lidar_0x784;
+  message 0x7D4 msg_LRCR_0x7D4;
+  message 0x7F2 msg_MRR_0x7F2;
+  message 0x701 msg_PAS_0x701;
+  message 0x761 msg_RFCR_0x761;
+  message 0x7C2 msg_RRCR_0x7C2;
+  message 0x7DF msg_VDS_0x7DF;
+
+  msTimer tmr_diag_poll;
+  long    diagPollIdx;
+  long    diagPollActive;
+
+  byte    udsRxBuf[DIAG_ECU_COUNT][UDS_BUF_SIZE];
+  long    udsRxLen[DIAG_ECU_COUNT];
+  long    udsRxIdx[DIAG_ECU_COUNT];
+  byte    tpExpectSeq[DIAG_ECU_COUNT];
+  long    tpRxActive[DIAG_ECU_COUNT];
+}
+
+void Diag_ResetTpRx(long ecuIdx)
+{
+  if (ecuIdx < 0 || ecuIdx >= DIAG_ECU_COUNT)
+    return;
+  udsRxLen[ecuIdx] = 0;
+  udsRxIdx[ecuIdx] = 0;
+  tpExpectSeq[ecuIdx] = 1;
+  tpRxActive[ecuIdx] = 0;
+}
+
+void Diag_ResetAllTpRx(void)
+{
+  long i;
+  for (i = 0; i < DIAG_ECU_COUNT; i++)
+    Diag_ResetTpRx(i);
+}
+
+long Diag_RxIdToEcuIdx(long rxId)
+{
+  switch (rxId)
+  {
+    case 0x71A: return 0;
+    case 0x768: return 1;
+    case 0x73E: return 2;
+    case 0x75F: return 3;
+    case 0x78C: return 4;
+    case 0x7DC: return 5;
+    case 0x7FA: return 6;
+    case 0x709: return 7;
+    case 0x769: return 8;
+    case 0x7CA: return 9;
+    default: return -1;
+  }
+}
+
+void Diag_WriteEcuLabel(long ecuIdx)
+{
+  switch (ecuIdx)
+  {
+    case 0: write("ADC"); break;
+    case 1: write("LFCR"); break;
+    case 2: write("Lidar_736"); break;
+    case 3: write("Lidar_757"); break;
+    case 4: write("Lidar_784"); break;
+    case 5: write("LRCR"); break;
+    case 6: write("MRR"); break;
+    case 7: write("PAS"); break;
+    case 8: write("RFCR"); break;
+    case 9: write("RRCR"); break;
+    default: write("?"); break;
+  }
+}
+
+void Diag_FormatDtcCode(byte b0, byte b1, byte b2, char out[], long outSize)
+{
+  char prefix;
+  long val;
+  val = ((b0 & 0xFF) << 16) | ((b1 & 0xFF) << 8) | (b2 & 0xFF);
+  switch ((b0 >> 6) & 0x03)
+  {
+    case 0: prefix = 'P'; break;
+    case 1: prefix = 'C'; break;
+    case 2: prefix = 'B'; break;
+    default: prefix = 'U'; break;
+  }
+  snprintf(out, outSize, "%c%06X", prefix, val & 0x3FFFFF);
+}
+
+void Diag_DescribeStatus(byte st, char out[], long outSize)
+{
+  snprintf(
+    out, outSize,
+    "TF=%d Conf=%d Pend=%d MIL=%d raw=0x%02X",
+    (st & 0x01) != 0,
+    (st & 0x08) != 0,
+    (st & 0x04) != 0,
+    (st & 0x40) != 0,
+    st
+  );
+}
+
+void Diag_DescribeNrc(byte nrc, char out[], long outSize)
+{
+  switch (nrc)
+  {
+    case 0x12: snprintf(out, outSize, "subFunctionNotSupported"); break;
+    case 0x13: snprintf(out, outSize, "incorrectMessageLength"); break;
+    case 0x22: snprintf(out, outSize, "conditionsNotCorrect"); break;
+    case 0x31: snprintf(out, outSize, "requestOutOfRange"); break;
+    case 0x33: snprintf(out, outSize, "securityAccessDenied"); break;
+    case 0x78: snprintf(out, outSize, "responsePending"); break;
+    default:   snprintf(out, outSize, "NRC"); break;
+  }
+}
+
+void Diag_SendTpSingle_19_02_09(long ecuIdx)
+{
+  switch (ecuIdx)
+  {
+    case 0:
+      msg_ADC_0x712.CAN = DIAG_CAN_CH;
+      msg_ADC_0x712.byte(0) = 0x03;
+      msg_ADC_0x712.byte(1) = 0x19;
+      msg_ADC_0x712.byte(2) = 0x02;
+      msg_ADC_0x712.byte(3) = DTC_STATUS_MASK;
+      msg_ADC_0x712.byte(4) = 0x00;
+      msg_ADC_0x712.byte(5) = 0x00;
+      msg_ADC_0x712.byte(6) = 0x00;
+      msg_ADC_0x712.byte(7) = 0x00;
+      output(msg_ADC_0x712);
+      break;
+    case 1:
+      msg_LFCR_0x760.CAN = DIAG_CAN_CH;
+      msg_LFCR_0x760.byte(0) = 0x03;
+      msg_LFCR_0x760.byte(1) = 0x19;
+      msg_LFCR_0x760.byte(2) = 0x02;
+      msg_LFCR_0x760.byte(3) = DTC_STATUS_MASK;
+      msg_LFCR_0x760.byte(4) = 0x00;
+      msg_LFCR_0x760.byte(5) = 0x00;
+      msg_LFCR_0x760.byte(6) = 0x00;
+      msg_LFCR_0x760.byte(7) = 0x00;
+      output(msg_LFCR_0x760);
+      break;
+    case 2:
+      msg_Lidar_0x736.CAN = DIAG_CAN_CH;
+      msg_Lidar_0x736.byte(0) = 0x03;
+      msg_Lidar_0x736.byte(1) = 0x19;
+      msg_Lidar_0x736.byte(2) = 0x02;
+      msg_Lidar_0x736.byte(3) = DTC_STATUS_MASK;
+      msg_Lidar_0x736.byte(4) = 0x00;
+      msg_Lidar_0x736.byte(5) = 0x00;
+      msg_Lidar_0x736.byte(6) = 0x00;
+      msg_Lidar_0x736.byte(7) = 0x00;
+      output(msg_Lidar_0x736);
+      break;
+    case 3:
+      msg_Lidar_0x757.CAN = DIAG_CAN_CH;
+      msg_Lidar_0x757.byte(0) = 0x03;
+      msg_Lidar_0x757.byte(1) = 0x19;
+      msg_Lidar_0x757.byte(2) = 0x02;
+      msg_Lidar_0x757.byte(3) = DTC_STATUS_MASK;
+      msg_Lidar_0x757.byte(4) = 0x00;
+      msg_Lidar_0x757.byte(5) = 0x00;
+      msg_Lidar_0x757.byte(6) = 0x00;
+      msg_Lidar_0x757.byte(7) = 0x00;
+      output(msg_Lidar_0x757);
+      break;
+    case 4:
+      msg_Lidar_0x784.CAN = DIAG_CAN_CH;
+      msg_Lidar_0x784.byte(0) = 0x03;
+      msg_Lidar_0x784.byte(1) = 0x19;
+      msg_Lidar_0x784.byte(2) = 0x02;
+      msg_Lidar_0x784.byte(3) = DTC_STATUS_MASK;
+      msg_Lidar_0x784.byte(4) = 0x00;
+      msg_Lidar_0x784.byte(5) = 0x00;
+      msg_Lidar_0x784.byte(6) = 0x00;
+      msg_Lidar_0x784.byte(7) = 0x00;
+      output(msg_Lidar_0x784);
+      break;
+    case 5:
+      msg_LRCR_0x7D4.CAN = DIAG_CAN_CH;
+      msg_LRCR_0x7D4.byte(0) = 0x03;
+      msg_LRCR_0x7D4.byte(1) = 0x19;
+      msg_LRCR_0x7D4.byte(2) = 0x02;
+      msg_LRCR_0x7D4.byte(3) = DTC_STATUS_MASK;
+      msg_LRCR_0x7D4.byte(4) = 0x00;
+      msg_LRCR_0x7D4.byte(5) = 0x00;
+      msg_LRCR_0x7D4.byte(6) = 0x00;
+      msg_LRCR_0x7D4.byte(7) = 0x00;
+      output(msg_LRCR_0x7D4);
+      break;
+    case 6:
+      msg_MRR_0x7F2.CAN = DIAG_CAN_CH;
+      msg_MRR_0x7F2.byte(0) = 0x03;
+      msg_MRR_0x7F2.byte(1) = 0x19;
+      msg_MRR_0x7F2.byte(2) = 0x02;
+      msg_MRR_0x7F2.byte(3) = DTC_STATUS_MASK;
+      msg_MRR_0x7F2.byte(4) = 0x00;
+      msg_MRR_0x7F2.byte(5) = 0x00;
+      msg_MRR_0x7F2.byte(6) = 0x00;
+      msg_MRR_0x7F2.byte(7) = 0x00;
+      output(msg_MRR_0x7F2);
+      break;
+    case 7:
+      msg_PAS_0x701.CAN = DIAG_CAN_CH;
+      msg_PAS_0x701.byte(0) = 0x03;
+      msg_PAS_0x701.byte(1) = 0x19;
+      msg_PAS_0x701.byte(2) = 0x02;
+      msg_PAS_0x701.byte(3) = DTC_STATUS_MASK;
+      msg_PAS_0x701.byte(4) = 0x00;
+      msg_PAS_0x701.byte(5) = 0x00;
+      msg_PAS_0x701.byte(6) = 0x00;
+      msg_PAS_0x701.byte(7) = 0x00;
+      output(msg_PAS_0x701);
+      break;
+    case 8:
+      msg_RFCR_0x761.CAN = DIAG_CAN_CH;
+      msg_RFCR_0x761.byte(0) = 0x03;
+      msg_RFCR_0x761.byte(1) = 0x19;
+      msg_RFCR_0x761.byte(2) = 0x02;
+      msg_RFCR_0x761.byte(3) = DTC_STATUS_MASK;
+      msg_RFCR_0x761.byte(4) = 0x00;
+      msg_RFCR_0x761.byte(5) = 0x00;
+      msg_RFCR_0x761.byte(6) = 0x00;
+      msg_RFCR_0x761.byte(7) = 0x00;
+      output(msg_RFCR_0x761);
+      break;
+    case 9:
+      msg_RRCR_0x7C2.CAN = DIAG_CAN_CH;
+      msg_RRCR_0x7C2.byte(0) = 0x03;
+      msg_RRCR_0x7C2.byte(1) = 0x19;
+      msg_RRCR_0x7C2.byte(2) = 0x02;
+      msg_RRCR_0x7C2.byte(3) = DTC_STATUS_MASK;
+      msg_RRCR_0x7C2.byte(4) = 0x00;
+      msg_RRCR_0x7C2.byte(5) = 0x00;
+      msg_RRCR_0x7C2.byte(6) = 0x00;
+      msg_RRCR_0x7C2.byte(7) = 0x00;
+      output(msg_RRCR_0x7C2);
+      break;
+  }
+}
+
+void Diag_SendFlowControlForEcu(long ecuIdx)
+{
+  switch (ecuIdx)
+  {
+    case 0:
+      msg_ADC_0x712.CAN = DIAG_CAN_CH;
+      msg_ADC_0x712.byte(0) = 0x30;
+      msg_ADC_0x712.byte(1) = 0x00;
+      msg_ADC_0x712.byte(2) = 0x00;
+      msg_ADC_0x712.byte(3) = 0x00;
+      msg_ADC_0x712.byte(4) = 0x00;
+      msg_ADC_0x712.byte(5) = 0x00;
+      msg_ADC_0x712.byte(6) = 0x00;
+      msg_ADC_0x712.byte(7) = 0x00;
+      output(msg_ADC_0x712);
+      break;
+    case 1:
+      msg_LFCR_0x760.CAN = DIAG_CAN_CH;
+      msg_LFCR_0x760.byte(0) = 0x30;
+      msg_LFCR_0x760.byte(1) = 0x00;
+      msg_LFCR_0x760.byte(2) = 0x00;
+      msg_LFCR_0x760.byte(3) = 0x00;
+      msg_LFCR_0x760.byte(4) = 0x00;
+      msg_LFCR_0x760.byte(5) = 0x00;
+      msg_LFCR_0x760.byte(6) = 0x00;
+      msg_LFCR_0x760.byte(7) = 0x00;
+      output(msg_LFCR_0x760);
+      break;
+    case 2:
+      msg_Lidar_0x736.CAN = DIAG_CAN_CH;
+      msg_Lidar_0x736.byte(0) = 0x30;
+      msg_Lidar_0x736.byte(1) = 0x00;
+      msg_Lidar_0x736.byte(2) = 0x00;
+      msg_Lidar_0x736.byte(3) = 0x00;
+      msg_Lidar_0x736.byte(4) = 0x00;
+      msg_Lidar_0x736.byte(5) = 0x00;
+      msg_Lidar_0x736.byte(6) = 0x00;
+      msg_Lidar_0x736.byte(7) = 0x00;
+      output(msg_Lidar_0x736);
+      break;
+    case 3:
+      msg_Lidar_0x757.CAN = DIAG_CAN_CH;
+      msg_Lidar_0x757.byte(0) = 0x30;
+      msg_Lidar_0x757.byte(1) = 0x00;
+      msg_Lidar_0x757.byte(2) = 0x00;
+      msg_Lidar_0x757.byte(3) = 0x00;
+      msg_Lidar_0x757.byte(4) = 0x00;
+      msg_Lidar_0x757.byte(5) = 0x00;
+      msg_Lidar_0x757.byte(6) = 0x00;
+      msg_Lidar_0x757.byte(7) = 0x00;
+      output(msg_Lidar_0x757);
+      break;
+    case 4:
+      msg_Lidar_0x784.CAN = DIAG_CAN_CH;
+      msg_Lidar_0x784.byte(0) = 0x30;
+      msg_Lidar_0x784.byte(1) = 0x00;
+      msg_Lidar_0x784.byte(2) = 0x00;
+      msg_Lidar_0x784.byte(3) = 0x00;
+      msg_Lidar_0x784.byte(4) = 0x00;
+      msg_Lidar_0x784.byte(5) = 0x00;
+      msg_Lidar_0x784.byte(6) = 0x00;
+      msg_Lidar_0x784.byte(7) = 0x00;
+      output(msg_Lidar_0x784);
+      break;
+    case 5:
+      msg_LRCR_0x7D4.CAN = DIAG_CAN_CH;
+      msg_LRCR_0x7D4.byte(0) = 0x30;
+      msg_LRCR_0x7D4.byte(1) = 0x00;
+      msg_LRCR_0x7D4.byte(2) = 0x00;
+      msg_LRCR_0x7D4.byte(3) = 0x00;
+      msg_LRCR_0x7D4.byte(4) = 0x00;
+      msg_LRCR_0x7D4.byte(5) = 0x00;
+      msg_LRCR_0x7D4.byte(6) = 0x00;
+      msg_LRCR_0x7D4.byte(7) = 0x00;
+      output(msg_LRCR_0x7D4);
+      break;
+    case 6:
+      msg_MRR_0x7F2.CAN = DIAG_CAN_CH;
+      msg_MRR_0x7F2.byte(0) = 0x30;
+      msg_MRR_0x7F2.byte(1) = 0x00;
+      msg_MRR_0x7F2.byte(2) = 0x00;
+      msg_MRR_0x7F2.byte(3) = 0x00;
+      msg_MRR_0x7F2.byte(4) = 0x00;
+      msg_MRR_0x7F2.byte(5) = 0x00;
+      msg_MRR_0x7F2.byte(6) = 0x00;
+      msg_MRR_0x7F2.byte(7) = 0x00;
+      output(msg_MRR_0x7F2);
+      break;
+    case 7:
+      msg_PAS_0x701.CAN = DIAG_CAN_CH;
+      msg_PAS_0x701.byte(0) = 0x30;
+      msg_PAS_0x701.byte(1) = 0x00;
+      msg_PAS_0x701.byte(2) = 0x00;
+      msg_PAS_0x701.byte(3) = 0x00;
+      msg_PAS_0x701.byte(4) = 0x00;
+      msg_PAS_0x701.byte(5) = 0x00;
+      msg_PAS_0x701.byte(6) = 0x00;
+      msg_PAS_0x701.byte(7) = 0x00;
+      output(msg_PAS_0x701);
+      break;
+    case 8:
+      msg_RFCR_0x761.CAN = DIAG_CAN_CH;
+      msg_RFCR_0x761.byte(0) = 0x30;
+      msg_RFCR_0x761.byte(1) = 0x00;
+      msg_RFCR_0x761.byte(2) = 0x00;
+      msg_RFCR_0x761.byte(3) = 0x00;
+      msg_RFCR_0x761.byte(4) = 0x00;
+      msg_RFCR_0x761.byte(5) = 0x00;
+      msg_RFCR_0x761.byte(6) = 0x00;
+      msg_RFCR_0x761.byte(7) = 0x00;
+      output(msg_RFCR_0x761);
+      break;
+    case 9:
+      msg_RRCR_0x7C2.CAN = DIAG_CAN_CH;
+      msg_RRCR_0x7C2.byte(0) = 0x30;
+      msg_RRCR_0x7C2.byte(1) = 0x00;
+      msg_RRCR_0x7C2.byte(2) = 0x00;
+      msg_RRCR_0x7C2.byte(3) = 0x00;
+      msg_RRCR_0x7C2.byte(4) = 0x00;
+      msg_RRCR_0x7C2.byte(5) = 0x00;
+      msg_RRCR_0x7C2.byte(6) = 0x00;
+      msg_RRCR_0x7C2.byte(7) = 0x00;
+      output(msg_RRCR_0x7C2);
+      break;
+  }
+}
+
+void Diag_SendReadDtcOnEcu(long ecuIdx)
+{
+  write("[VDS-Diag] Tx ");
+  Diag_WriteEcuLabel(ecuIdx);
+  write(" 19 02 %02X", DTC_STATUS_MASK);
+  Diag_SendTpSingle_19_02_09(ecuIdx);
+}
+
+void Diag_SendFunctional(void)
+{
+  long i;
+  write("[VDS-Diag] Tx Func_7DF 19 02 %02X", DTC_STATUS_MASK);
+  for (i = 0; i < DIAG_ECU_COUNT; i++)
+    Diag_ResetTpRx(i);
+  msg_VDS_0x7DF.CAN = DIAG_CAN_CH;
+  msg_VDS_0x7DF.byte(0) = 0x03;
+  msg_VDS_0x7DF.byte(1) = 0x19;
+  msg_VDS_0x7DF.byte(2) = 0x02;
+  msg_VDS_0x7DF.byte(3) = DTC_STATUS_MASK;
+  msg_VDS_0x7DF.byte(4) = 0x00;
+  msg_VDS_0x7DF.byte(5) = 0x00;
+  msg_VDS_0x7DF.byte(6) = 0x00;
+  msg_VDS_0x7DF.byte(7) = 0x00;
+  output(msg_VDS_0x7DF);
+}
+
+void Diag_ParseNegative(long ecuIdx)
+{
+  char nrcDesc[48];
+  if (udsRxLen[ecuIdx] < 3)
+    return;
+  Diag_DescribeNrc(udsRxBuf[ecuIdx][2], nrcDesc, elCount(nrcDesc));
+  write("[VDS-Diag] ");
+  Diag_WriteEcuLabel(ecuIdx);
+  write(" Negative 7F SID=0x%02X NRC=0x%02X (%s)", udsRxBuf[ecuIdx][1], udsRxBuf[ecuIdx][2], nrcDesc);
+}
+
+void Diag_ParsePositive59_02_09(long ecuIdx)
+{
+  long off;
+  long dtcCount;
+  byte dtcB0, dtcB1, dtcB2, status;
+  char dtcStr[16];
+  char stStr[80];
+
+  if (udsRxLen[ecuIdx] < 4)
+  {
+    write("[VDS-Diag] ");
+    Diag_WriteEcuLabel(ecuIdx);
+    write(" positive too short");
+    return;
+  }
+  if (udsRxBuf[ecuIdx][0] != 0x59 || udsRxBuf[ecuIdx][1] != 0x02)
+  {
+    write("[VDS-Diag] ");
+    Diag_WriteEcuLabel(ecuIdx);
+    write(" unexpected SID 0x%02X", udsRxBuf[ecuIdx][0]);
+    return;
+  }
+  write("[VDS-Diag] ");
+  Diag_WriteEcuLabel(ecuIdx);
+  write(
+    " Positive 59 02 %02X avail=0x%02X len=%d",
+    udsRxBuf[ecuIdx][2], udsRxBuf[ecuIdx][3], udsRxLen[ecuIdx]
+  );
+
+  off = 4;
+  dtcCount = 0;
+  while (off + 3 < udsRxLen[ecuIdx])
+  {
+    dtcB0 = udsRxBuf[ecuIdx][off];
+    dtcB1 = udsRxBuf[ecuIdx][off + 1];
+    dtcB2 = udsRxBuf[ecuIdx][off + 2];
+    status = udsRxBuf[ecuIdx][off + 3];
+    off += 4;
+    Diag_FormatDtcCode(dtcB0, dtcB1, dtcB2, dtcStr, elCount(dtcStr));
+    Diag_DescribeStatus(status, stStr, elCount(stStr));
+    write("[VDS-Diag] ");
+    Diag_WriteEcuLabel(ecuIdx);
+    write(" DTC#%d %s raw=%02X%02X%02X %s", dtcCount + 1, dtcStr, dtcB0, dtcB1, dtcB2, stStr);
+    dtcCount++;
+  }
+  if (dtcCount == 0)
+  {
+    write("[VDS-Diag] ");
+    Diag_WriteEcuLabel(ecuIdx);
+    write(" no DTC for mask 0x%02X", DTC_STATUS_MASK);
+  }
+  else
+  {
+    write("[VDS-Diag] ");
+    Diag_WriteEcuLabel(ecuIdx);
+    write(" total %d DTC(s)", dtcCount);
+  }
+}
+
+void Diag_ParseUdsPayload(long ecuIdx)
+{
+  if (udsRxLen[ecuIdx] < 1)
+    return;
+  if (udsRxBuf[ecuIdx][0] == 0x7F)
+  {
+    Diag_ParseNegative(ecuIdx);
+    return;
+  }
+  if (udsRxBuf[ecuIdx][0] == 0x59 && udsRxBuf[ecuIdx][1] == 0x02)
+  {
+    Diag_ParsePositive59_02_09(ecuIdx);
+    return;
+  }
+  write("[VDS-Diag] ");
+  Diag_WriteEcuLabel(ecuIdx);
+  write(" unhandled SID 0x%02X", udsRxBuf[ecuIdx][0]);
+}
+
+void Diag_OnTpComplete(long ecuIdx)
+{
+  write("[VDS-Diag] Rx complete ");
+  Diag_WriteEcuLabel(ecuIdx);
+  write(" len=%d", udsRxLen[ecuIdx]);
+  Diag_ParseUdsPayload(ecuIdx);
+  Diag_ResetTpRx(ecuIdx);
+}
+
+void Diag_OnRxMessage(long ecuIdx)
+{
+  byte pci;
+  long sfLen;
+  long totalLen;
+  long i;
+  long copyLen;
+  byte seq;
+
+  pci = this.byte(0);
+
+  if ((pci & 0xF0) == 0x00)
+  {
+    sfLen = pci & 0x0F;
+    if (sfLen < 1)
+      return;
+    Diag_ResetTpRx(ecuIdx);
+    for (i = 0; i < sfLen && i < 7; i++)
+      udsRxBuf[ecuIdx][i] = this.byte(1 + i);
+    udsRxLen[ecuIdx] = sfLen;
+    udsRxIdx[ecuIdx] = sfLen;
+    Diag_OnTpComplete(ecuIdx);
+    return;
+  }
+
+  if ((pci & 0xF0) == 0x10)
+  {
+    totalLen = ((pci & 0x0F) << 8) | (this.byte(1) & 0xFF);
+    if (totalLen <= 0 || totalLen > UDS_BUF_SIZE)
+      return;
+    Diag_ResetTpRx(ecuIdx);
+    udsRxLen[ecuIdx] = totalLen;
+    tpRxActive[ecuIdx] = 1;
+    tpExpectSeq[ecuIdx] = 1;
+    copyLen = 6;
+    if (copyLen > totalLen)
+      copyLen = totalLen;
+    for (i = 0; i < copyLen; i++)
+      udsRxBuf[ecuIdx][i] = this.byte(2 + i);
+    udsRxIdx[ecuIdx] = copyLen;
+    Diag_SendFlowControlForEcu(ecuIdx);
+    return;
+  }
+
+  if ((pci & 0xF0) == 0x20 && tpRxActive[ecuIdx])
+  {
+    seq = pci & 0x0F;
+    if (seq != tpExpectSeq[ecuIdx])
+    {
+      write("[VDS-Diag] CF seq error ecu=%d", ecuIdx);
+      Diag_ResetTpRx(ecuIdx);
+      return;
+    }
+    tpExpectSeq[ecuIdx] = (tpExpectSeq[ecuIdx] + 1) & 0x0F;
+    if (tpExpectSeq[ecuIdx] == 0)
+      tpExpectSeq[ecuIdx] = 1;
+    copyLen = 7;
+    if (udsRxIdx[ecuIdx] + copyLen > udsRxLen[ecuIdx])
+      copyLen = udsRxLen[ecuIdx] - udsRxIdx[ecuIdx];
+    for (i = 0; i < copyLen; i++)
+      udsRxBuf[ecuIdx][udsRxIdx[ecuIdx] + i] = this.byte(1 + i);
+    udsRxIdx[ecuIdx] += copyLen;
+    if (udsRxIdx[ecuIdx] >= udsRxLen[ecuIdx])
+      Diag_OnTpComplete(ecuIdx);
+  }
+}
+
+void Diag_SendToEcuIndex(long ecuIdx)
+{
+  if (ecuIdx < 0 || ecuIdx >= DIAG_ECU_COUNT)
+    return;
+  Diag_ResetTpRx(ecuIdx);
+  Diag_SendReadDtcOnEcu(ecuIdx);
+}
+
+void Diag_StartRequest(long target)
+{
+  if (target == DIAG_FUNC_TARGET)
+  {
+    Diag_SendFunctional();
+    return;
+  }
+  if (target == DIAG_ALL_TARGET)
+  {
+    diagPollIdx = 0;
+    diagPollActive = 1;
+    Diag_SendToEcuIndex(0);
+    setTimer(tmr_diag_poll, 150);
+    return;
+  }
+  if (target >= 0 && target < DIAG_ECU_COUNT)
+  {
+    Diag_SendToEcuIndex(target);
+    return;
+  }
+  write("[VDS-Diag] diagnosticTarget=%d invalid (0~9, 10, 255)", target);
+}
+
+on start
+{
+  Diag_ResetAllTpRx();
+  diagPollIdx = 0;
+  diagPollActive = 0;
+  write("[VDS-Diag] Ready. target: 0=ADC..9=RRCR, 10=7DF, 255=all");
+}
+
+on sysvar sysvar::diagnosticButton
+{
+  long target;
+  if (@sysvar::diagnosticButton != 1)
+    return;
+  if (@sysvar::diagnosticTarget < 0)
+    target = 0;
+  else
+    target = @sysvar::diagnosticTarget;
+  Diag_StartRequest(target);
+  @sysvar::diagnosticButton = 0;
+}
+
+on timer tmr_diag_poll
+{
+  if (!diagPollActive)
+    return;
+  diagPollIdx++;
+  if (diagPollIdx >= DIAG_ECU_COUNT)
+  {
+    diagPollActive = 0;
+    write("[VDS-Diag] poll all ECUs finished");
+    return;
+  }
+  Diag_SendToEcuIndex(diagPollIdx);
+  setTimer(tmr_diag_poll, 150);
+}
+
+/* 仅处理 VDS 接收诊断 ID */
+on message *
+{
+  long ecuIdx;
+  if (this.CAN != DIAG_CAN_CH)
+    return;
+  ecuIdx = Diag_RxIdToEcuIdx(this.id);
+  if (ecuIdx < 0)
+    return;
+  Diag_OnRxMessage(ecuIdx);
+}
