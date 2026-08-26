@@ -20,8 +20,8 @@
  * 系统变量：
  *   diagnosticButton  int  1=触发
  *   diagnosticTarget  int  0~9 单 ECU，10=0x7DF，255=轮询全部物理 ECU
- *   diagnosticDtcCount  int  最近一次解析到的 DTC 条数（可选）
- *   diagnosticLastRxId  int  最近一次响应 CAN ID（可选）
+ *
+ * 节点内变量 diagLastRxId / diagLastDtcCount 保存最近一次解析结果（无需额外 sysvar）。
  *
  * 默认 CAN 通道 DIAG_CAN_CH=2，按工程修改。
  */
@@ -56,6 +56,9 @@ variables
   long    udsRxIdx[10];
   byte    tpExpectSeq[10];
   long    tpRxActive[10];
+
+  long    diagLastRxId;
+  long    diagLastDtcCount;
 
   byte    diagRxData[8];
 }
@@ -504,8 +507,8 @@ void Diag_PrintFullUdsHex(long ecuIdx)
 
 void Diag_SetLastRxMeta(long ecuIdx, long rxId)
 {
-  @sysvar::diagnosticLastRxId = rxId;
-  @sysvar::diagnosticDtcCount = 0;
+  diagLastRxId = rxId;
+  diagLastDtcCount = 0;
 }
 
 void Diag_ParseNegativeFull(long ecuIdx)
@@ -560,7 +563,7 @@ void Diag_ParseDtcRecords(long ecuIdx, long off, long recordSize)
     dtcCount++;
   }
 
-  @sysvar::diagnosticDtcCount = dtcCount;
+  diagLastDtcCount = dtcCount;
   if (off < udsRxLen[ecuIdx])
   {
     write("  trailing bytes (%d):", udsRxLen[ecuIdx] - off);
@@ -616,7 +619,7 @@ void Diag_ParsePositiveReadDtcFull(long ecuIdx)
   if (payloadLen <= 0)
   {
     write("  (no DTC data after header)");
-    @sysvar::diagnosticDtcCount = 0;
+    diagLastDtcCount = 0;
     write("[VDS-Diag] ===== End =====");
     return;
   }
