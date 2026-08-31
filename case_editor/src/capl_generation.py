@@ -16,10 +16,10 @@ CAPL 生成器
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
   时用 g_sv_quiet_* 计数器屏蔽 on sysvar，避免联动/恢复再次触发 burst。
-- 周期发送：节点共用 1ms 调度定时器 tmr_sched，每条报文用 due_*（CAPL timeNow()，单位 10µs）
-    记录下次到期。下次到期以「本次发送前」的 now + CycleTime 计算，避免 fill/output 耗时叠进周期
-    （旧实现 on timer 里 send 后再 setTimer(周期)，10ms 报文在实时模式下会变成 ~19ms，并紧跟 2~3ms 补发）。
-    漏 tick 时不追赶，避免两帧挨在一起。
+- 周期发送：节点共用 1ms 调度定时器 tmr_sched，每条报文用 due_* / last_tx_*（CAPL timeNow()，
+    单位 10µs，1ms=100）。正常间隔约一个周期（CANoe 实时下常见 8~11ms 抖动）。偶发漏 tick 时
+    若按原 10ms 格子补发，会在 ~19ms 后再出 2~3ms 的一帧；因此下次到期以实际发送时刻 + 周期
+    计算，且与上一帧间隔小于半个周期则只改期、不 output。
 - 多路复用报文：周期/CE/CA 发送（含正常周期与 CE/CA 的 E/A burst）均按 multiplexer_id
     从小到大连续 output 全部子 ID（无 delay）；纯 Event / IfActive burst 仅发送触发信号所属 group。
   Mux 开关信号不参与 burst 触发与影子恢复；其报文值由 fill_group(mux_id) 驱动，与用户 sysvar 赋值互不干扰。
@@ -45,9 +45,11 @@ MSG_SEND_IF_ACTIVE = 2
 MSG_SEND_CE = 3
 MSG_SEND_CA = 4
 
-# CAPL timeNow() 单位为 10µs，1ms = 100 ticks。调度周期必须按发送前的 now 计算。
+# CAPL timeNow() 单位为 10µs，1ms = 100 ticks。调度按实际发送时刻加周期，不追赶漏掉的格子。
 CAPL_TIMENOW_TICKS_PER_MS = 100
 SCHEDULER_TICK_MS = 1
+# 半周期（ticks/ms）：10ms 周期则最小间隔 5ms，挡住 2~3ms 补发，放行 8~11ms 正常抖动。
+CAPL_MIN_GAP_TICKS_PER_MS = CAPL_TIMENOW_TICKS_PER_MS // 2
 
 
 def capl_ms_to_timenow_ticks(cycle_ms: int) -> int:
@@ -56,14 +58,18 @@ def capl_ms_to_timenow_ticks(cycle_ms: int) -> int:
 
 
 def next_cyclic_due_ticks(now_ticks: int, period_ticks: int) -> int:
-    """计算周期报文的下次到期时刻。
-
-    以本次发送前的 now 为起点加一个周期，不把 fill/output 耗时叠进去，也不追赶漏掉的格子
-    （追赶会在 19ms 长间隔后紧跟 2~3ms 的第二帧）。
-    """
+    """漏 tick 后的下次到期：从本次实际 now 再加一个周期，不补原格子上的那一帧。"""
     if period_ticks <= 0:
         period_ticks = capl_ms_to_timenow_ticks(10)
     return now_ticks + period_ticks
+
+
+def is_cyclic_catchup_gap(now_ticks: int, last_tx_ticks: int, period_ticks: int) -> bool:
+    """上一帧之后不足半个周期：视为漏 tick 后的连发补帧，应当丢弃。"""
+    if last_tx_ticks == 0 or period_ticks <= 0:
+        return False
+    gap = now_ticks - last_tx_ticks
+    return 0 <= gap < period_ticks // 2
 
 # 单个信号在 .vsysvar 报文结构里的成员后缀（带前导下划线）。
 # 注意：匹配时必须按“长后缀优先”，否则 _special_value 会错误命中 _has_special_value。
@@ -1053,10 +1059,16 @@ def _due_var(message_name: str) -> str:
     return f"due_{message_name}"
 
 
+def _last_tx_var(message_name: str) -> str:
+    """上次周期发送的 timeNow()。0 表示还没发过。"""
+    return f"last_tx_{message_name}"
+
+
 def _build_core_burst_timer_variables(message_name: str) -> List[str]:
-    """arm / poll / send 始终引用 due / burst_left / burst_fast，所有调度中的报文都必须声明。"""
+    """arm / poll / send 始终引用 due / last_tx / burst_left / burst_fast。"""
     return [
         f"  long {_due_var(message_name)};",
+        f"  long {_last_tx_var(message_name)};",
         f"  long burst_left_{message_name};",
         f"  long burst_fast_{message_name};",
     ]
@@ -1098,6 +1110,7 @@ def _build_begin_burst_function(namespace: str, message_name: str, parsed: Parse
         f"  burst_fast_{message_name} = use_fast;",
         f"  {_due_var(message_name)} = 0;",
         f"  send_{message_name}();",
+        f"  {_last_tx_var(message_name)} = timeNow();",
         f"  burst_left_{message_name}--;",
         f"  if (burst_left_{message_name} > 0)",
         f"    arm_{message_name}(timeNow());",
@@ -1498,6 +1511,7 @@ def _build_can_file(
         out.append(f"  burst_left_{name} = 0;")
         out.append(f"  burst_fast_{name} = 0;")
         out.append(f"  {_due_var(name)} = 0;")
+        out.append(f"  {_last_tx_var(name)} = 0;")
         if _message_needs_quiet(model, exclude):
             out.append(f"  {_quiet_var(name)} = 0;")
         if _has_msg_send_type(model):
@@ -1602,6 +1616,33 @@ def _build_arm_function(
     ]
 
 
+def _build_poll_min_gap_guard_lines(
+    namespace: str,
+    message_name: str,
+    parsed: ParsedSysvar,
+    indent: str = "  ",
+) -> List[str]:
+    """与上一帧间隔小于半个周期则只改期、不发送（丢掉 2~3ms 补发）。"""
+    last = _last_tx_var(message_name)
+    cycle_expr = _info_sysvar(namespace, message_name, "_MsgCycleTime", parsed, "10")
+    half = CAPL_MIN_GAP_TICKS_PER_MS
+    return [
+        f"{indent}if ({last} != 0)",
+        f"{indent}{{",
+        f"{indent}  _ct = {cycle_expr};",
+        f"{indent}  if (_ct <= 0)",
+        f"{indent}    _ct = 10;",
+        f"{indent}  _min = _ct * {half};",
+        f"{indent}  _gap = now - {last};",
+        f"{indent}  if (_gap >= 0 && _gap < _min)",
+        f"{indent}  {{",
+        f"{indent}    arm_{message_name}(now);",
+        f"{indent}    return;",
+        f"{indent}  }}",
+        f"{indent}}}",
+    ]
+
+
 def _build_poll_function(
     namespace: str,
     message_name: str,
@@ -1609,27 +1650,39 @@ def _build_poll_function(
     has_burst_funcs: bool = True,
 ) -> List[str]:
     due = _due_var(message_name)
+    last = _last_tx_var(message_name)
+    decls = [
+        "  long _ct;",
+        "  long _min;",
+        "  long _gap;",
+    ]
+    head = [
+        f"void poll_{message_name}(long now)",
+        "{",
+        *decls,
+        f"  if ({due} == 0)",
+        "    return;",
+        f"  if (now < {due})",
+        "    return;",
+    ]
     if not has_burst_funcs:
         return [
-            f"void poll_{message_name}(long now)",
-            "{",
-            f"  if ({due} == 0)",
-            "    return;",
-            f"  if (now < {due})",
-            "    return;",
+            *head,
+            *_build_poll_min_gap_guard_lines(namespace, message_name, parsed),
             f"  send_{message_name}();",
+            f"  {last} = now;",
             f"  arm_{message_name}(now);",
             "}",
             "",
         ]
     return [
-        f"void poll_{message_name}(long now)",
-        "{",
-        f"  if ({due} == 0)",
-        "    return;",
-        f"  if (now < {due})",
-        "    return;",
+        *head,
+        f"  if (burst_left_{message_name} <= 0)",
+        "  {",
+        *_build_poll_min_gap_guard_lines(namespace, message_name, parsed, indent="    "),
+        "  }",
         f"  send_{message_name}();",
+        f"  {last} = now;",
         f"  if (burst_left_{message_name} > 0)",
         "  {",
         f"    burst_left_{message_name}--;",

@@ -169,6 +169,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn("long burst_left_Media_0x32B;", content)
         self.assertIn("long burst_fast_Media_0x32B;", content)
         self.assertIn("long due_Media_0x32B;", content)
+        self.assertIn("long last_tx_Media_0x32B;", content)
         self.assertIn("msTimer tmr_sched;", content)
         self.assertNotIn("msTimer tmr_Media_0x32B", content)
         self.assertNotIn("burst_mux_Media_0x32B", content)
@@ -182,9 +183,10 @@ class CaplMuxGenerationTest(unittest.TestCase):
             "on timer tmr_sched\n{\n  long now;\n  setTimer(tmr_sched, 1);\n  now = timeNow();\n  poll_Media_0x32B(now);\n}",
             content,
         )
-        self.assertIn("  send_Media_0x32B();\n  arm_Media_0x32B(now);", content)
+        self.assertIn("  send_Media_0x32B();\n  last_tx_Media_0x32B = now;\n  arm_Media_0x32B(now);", content)
         self.assertIn("  due_Media_0x32B = _now + _ct * 100;", content)
         self.assertIn("  _ct = @media::Media_0x32B_Info.Media_0x32B_MsgCycleTime;", content)
+        self.assertIn("if (_gap >= 0 && _gap < _min)", content)
         self.assertNotIn("burst_left_Media_0x32B <= 0) return;", content)
 
     def test_sysvar_quiet_blocks_restore_and_linkage_retrigger(self) -> None:
