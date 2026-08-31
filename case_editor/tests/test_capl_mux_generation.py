@@ -255,6 +255,18 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn(f"(_old == ({inactive}) && _new != ({inactive}))", content)
         self.assertIn(f"(_old != ({inactive}) && _new == ({inactive}))", content)
 
+    def test_fill_uses_rv_not_pv_for_signal_assignment(self) -> None:
+        parsed = parse_vsysvar(_write_vsysvar(MUX_VSYSVAR))
+        model = parsed.messages["Media_0x32B"]
+        from case_editor.src.capl_generation import _build_fill_group_function
+
+        lines = _build_fill_group_function(
+            "media", model.name, model, parsed, False, "", "", "crc16", {}
+        )
+        content = "\n".join(lines)
+        self.assertIn("msg_Media_0x32B.CSW_Enable_S = @media::Media_0x32B.CSW_Enable_S_Rv;", content)
+        self.assertNotIn("CSW_Enable_S_Pv;", content)
+
     def test_fill_group_merges_same_mux_id(self) -> None:
         parsed = parse_vsysvar(_write_vsysvar(MUX_VSYSVAR))
         model = parsed.messages["Media_0x32B"]
