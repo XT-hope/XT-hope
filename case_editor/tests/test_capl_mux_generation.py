@@ -71,6 +71,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertEqual(model.mux.groups, [14])
         self.assertEqual(model.mux.initial_value, "0")
         self.assertEqual(model.info.msg_send_type, 0)
+        self.assertEqual(model.info.msg_cycle_time_ms, 100)
 
     def test_cycle_mux_uses_cyclic_timer_without_burst(self) -> None:
         parsed = parse_vsysvar(_write_vsysvar(MUX_VSYSVAR))
@@ -81,11 +82,16 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn("fill_Media_0x32B_group(long mux_id)", content)
         self.assertIn("void output_all_Media_0x32B_groups()", content)
         self.assertIn("output_all_Media_0x32B_groups();", content)
-        self.assertIn("setTimerCyclic(tmr_Media_0x32B, _ct);", content)
+        self.assertIn("setTimer(tmr_Media_0x32B, 100);", content)
         self.assertIn(
-            "on timer tmr_Media_0x32B\n{\n  send_Media_0x32B();\n}",
+            "on timer tmr_Media_0x32B\n"
+            "{\n"
+            "  arm_Media_0x32B();\n"
+            "  send_Media_0x32B();\n"
+            "}",
             content,
         )
+        self.assertNotIn("setTimerCyclic", content)
         self.assertNotIn("begin_burst_Media_0x32B", content)
         self.assertNotIn("finish_burst_Media_0x32B", content)
         self.assertNotIn("burst_left_Media_0x32B", content)

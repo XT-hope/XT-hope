@@ -11,8 +11,8 @@ CAPL 生成器
 - 每个报文按系统变量进行模拟发送，支持 MsgSendType：
     Cycle / Event / IfActive / CE / CA（数值与 DBC GenMsgSendType 一致：0~4）。
     {Msg}_Info.{Msg}_MsgSendType 的 startValue 在生成 CAPL 时解析并写死，运行时不读 MsgSendType。
-    Cycle：setTimerCyclic 周期发送，无 burst；CE/CA：周期 + 按信号 SigSendType 触发 burst；
-    Event/IfActive：仅 sysvar 触发 burst。CE/CA 常规周期在 on timer 中先 arm 再 send。
+    Cycle：单次 setTimer + on timer 先 arm 再 send（不用 setTimerCyclic，避免 send 超时堆积定时事件）；
+    CE/CA：周期 + 按信号 SigSendType 触发 burst；
     IfActive / CA：在 {Sig}_has_inactive_value==1 时，Pv/Rv 跨越 inactive（进入或离开）都触发 burst。
 - 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；报文对象 msg.信号 赋物理值。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
@@ -110,6 +110,7 @@ class MessageInfoModel:
     """报文 *_Info 结构中的发送控制字段。"""
     message_name: str
     msg_send_type: int = MSG_SEND_CYCLE
+    msg_cycle_time_ms: Optional[int] = None
     has_msg_cycle_time: bool = False
     has_msg_cycle_time_fast: bool = False
     has_msg_nr_of_repetition: bool = False
@@ -253,6 +254,7 @@ def _build_message_info_model(message_name: str, members: List[ET.Element]) -> M
             model.msg_send_type = _parse_int_start_value(member.get("startValue"), MSG_SEND_CYCLE)
         elif name == f"{message_name}_MsgCycleTime":
             model.has_msg_cycle_time = True
+            model.msg_cycle_time_ms = _parse_int_start_value(member.get("startValue"), 10)
         elif name == f"{message_name}_MsgCycleTimeFast":
             model.has_msg_cycle_time_fast = True
         elif name == f"{message_name}_MsgNrOfRepetition":
@@ -1550,6 +1552,19 @@ def _build_can_file(
     return "\n".join(out) + "\n"
 
 
+def _cycle_time_expr(
+    namespace: str,
+    message_name: str,
+    model: MessageModel,
+    parsed: ParsedSysvar,
+) -> str:
+    """周期毫秒数：优先用 vsysvar startValue（生成期常量），避免每次 arm 读 sysvar。"""
+    info = model.info
+    if info is not None and info.has_msg_cycle_time and info.msg_cycle_time_ms is not None:
+        return str(info.msg_cycle_time_ms if info.msg_cycle_time_ms > 0 else 10)
+    return _info_sysvar(namespace, message_name, "_MsgCycleTime", parsed, "10")
+
+
 def _build_arm_function(
     namespace: str,
     message_name: str,
@@ -1557,16 +1572,13 @@ def _build_arm_function(
     model: MessageModel,
 ) -> List[str]:
     send_type = _msg_send_type(model)
-    cycle_expr = _info_sysvar(namespace, message_name, "_MsgCycleTime", parsed, "10")
+    cycle_expr = _cycle_time_expr(namespace, message_name, model, parsed)
     if _is_cycle_send_type(send_type):
+        # 不用 setTimerCyclic：send() 若超过周期会堆积到期事件，导致帧间隔 29ms/3ms 交替抖动。
         return [
             f"void arm_{message_name}()",
             "{",
-            "  long _ct;",
-            f"  _ct = {cycle_expr};",
-            "  if (_ct <= 0)",
-            "    _ct = 10;",
-            f"  setTimerCyclic(tmr_{message_name}, _ct);",
+            f"  setTimer(tmr_{message_name}, {cycle_expr});",
             "}",
             "",
         ]
@@ -1595,6 +1607,18 @@ def _build_arm_function(
     return lines
 
 
+def _build_periodic_timer_handler(message_name: str) -> List[str]:
+    """周期发送：先重装定时器再 send，下一帧节拍从本次触发时刻起算。"""
+    return [
+        f"on timer tmr_{message_name}",
+        "{",
+        f"  arm_{message_name}();",
+        f"  send_{message_name}();",
+        "}",
+        "",
+    ]
+
+
 def _build_timer_handler(
     namespace: str,
     message_name: str,
@@ -1602,13 +1626,7 @@ def _build_timer_handler(
 ) -> List[str]:
     send_type = _msg_send_type(model)
     if _is_cycle_send_type(send_type):
-        return [
-            f"on timer tmr_{message_name}",
-            "{",
-            f"  send_{message_name}();",
-            "}",
-            "",
-        ]
+        return _build_periodic_timer_handler(message_name)
     if send_type in (MSG_SEND_EVENT, MSG_SEND_IF_ACTIVE):
         return [
             f"on timer tmr_{message_name}",
