@@ -168,16 +168,22 @@ class CaplMuxGenerationTest(unittest.TestCase):
 
         self.assertIn("long burst_left_Media_0x32B;", content)
         self.assertIn("long burst_fast_Media_0x32B;", content)
+        self.assertIn("long due_Media_0x32B;", content)
+        self.assertIn("msTimer tmr_sched;", content)
+        self.assertNotIn("msTimer tmr_Media_0x32B", content)
         self.assertNotIn("burst_mux_Media_0x32B", content)
         self.assertNotIn("g_prev_Media_0x32B_", content)
         self.assertNotIn("finish_burst_Media_0x32B", content)
         self.assertNotIn("begin_burst_Media_0x32B", content)
-        # 无 MsgSendType：按 Cycle 启动周期定时器，timer 只 send+arm
-        self.assertIn("  arm_Media_0x32B();", content)
+        # 无 MsgSendType：按 Cycle 登记到期时刻，1ms 调度器 poll+arm(now)
+        self.assertIn("  arm_Media_0x32B(timeNow());", content)
+        self.assertIn("void poll_Media_0x32B(long now)", content)
         self.assertIn(
-            "on timer tmr_Media_0x32B\n{\n  send_Media_0x32B();\n  arm_Media_0x32B();\n}",
+            "on timer tmr_sched\n{\n  long now;\n  setTimer(tmr_sched, 1);\n  now = timeNow();\n  poll_Media_0x32B(now);\n}",
             content,
         )
+        self.assertIn("  send_Media_0x32B();\n  arm_Media_0x32B(now);", content)
+        self.assertIn("  due_Media_0x32B = _now + _ct * 100;", content)
         self.assertIn("  _ct = @media::Media_0x32B_Info.Media_0x32B_MsgCycleTime;", content)
         self.assertNotIn("burst_left_Media_0x32B <= 0) return;", content)
 

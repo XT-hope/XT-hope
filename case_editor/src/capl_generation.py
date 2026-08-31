@@ -16,8 +16,12 @@ CAPL 生成器
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
   时用 g_sv_quiet_* 计数器屏蔽 on sysvar，避免联动/恢复再次触发 burst。
+- 周期发送：节点共用 1ms 调度定时器 tmr_sched，每条报文用 due_*（CAPL timeNow()，单位 10µs）
+    记录下次到期。下次到期以「本次发送前」的 now + CycleTime 计算，避免 fill/output 耗时叠进周期
+    （旧实现 on timer 里 send 后再 setTimer(周期)，10ms 报文在实时模式下会变成 ~19ms，并紧跟 2~3ms 补发）。
+    漏 tick 时不追赶，避免两帧挨在一起。
 - 多路复用报文：周期/CE/CA 发送（含正常周期与 CE/CA 的 E/A burst）均按 multiplexer_id
-  从小到大连续 output 全部子 ID（无 delay）；纯 Event / IfActive burst 仅发送触发信号所属 group。
+    从小到大连续 output 全部子 ID（无 delay）；纯 Event / IfActive burst 仅发送触发信号所属 group。
   Mux 开关信号不参与 burst 触发与影子恢复；其报文值由 fill_group(mux_id) 驱动，与用户 sysvar 赋值互不干扰。
   多路复用元数据全部来自 .vsysvar（_is_multiplexed / _is_multiplexer / _multiplexer_id），生成期写死。
 """
@@ -40,6 +44,26 @@ MSG_SEND_EVENT = 1
 MSG_SEND_IF_ACTIVE = 2
 MSG_SEND_CE = 3
 MSG_SEND_CA = 4
+
+# CAPL timeNow() 单位为 10µs，1ms = 100 ticks。调度周期必须按发送前的 now 计算。
+CAPL_TIMENOW_TICKS_PER_MS = 100
+SCHEDULER_TICK_MS = 1
+
+
+def capl_ms_to_timenow_ticks(cycle_ms: int) -> int:
+    """把毫秒周期换成 CAPL timeNow() ticks。"""
+    return int(cycle_ms) * CAPL_TIMENOW_TICKS_PER_MS
+
+
+def next_cyclic_due_ticks(now_ticks: int, period_ticks: int) -> int:
+    """计算周期报文的下次到期时刻。
+
+    以本次发送前的 now 为起点加一个周期，不把 fill/output 耗时叠进去，也不追赶漏掉的格子
+    （追赶会在 19ms 长间隔后紧跟 2~3ms 的第二帧）。
+    """
+    if period_ticks <= 0:
+        period_ticks = capl_ms_to_timenow_ticks(10)
+    return now_ticks + period_ticks
 
 # 单个信号在 .vsysvar 报文结构里的成员后缀（带前导下划线）。
 # 注意：匹配时必须按“长后缀优先”，否则 _special_value 会错误命中 _has_special_value。
@@ -1024,9 +1048,15 @@ def _message_needs_quiet(model: MessageModel, exclude: Optional[set] = None) -> 
     return _has_burst_triggers(model) or _message_has_pv_rv_linkage(model, exclude)
 
 
+def _due_var(message_name: str) -> str:
+    """报文下次到期时刻，单位与 timeNow() 相同（10µs）。0 表示未调度。"""
+    return f"due_{message_name}"
+
+
 def _build_core_burst_timer_variables(message_name: str) -> List[str]:
-    """arm / timer / send 始终引用 burst_left / burst_fast，所有带定时器的报文都必须声明。"""
+    """arm / poll / send 始终引用 due / burst_left / burst_fast，所有调度中的报文都必须声明。"""
     return [
+        f"  long {_due_var(message_name)};",
         f"  long burst_left_{message_name};",
         f"  long burst_fast_{message_name};",
     ]
@@ -1066,11 +1096,11 @@ def _build_begin_burst_function(namespace: str, message_name: str, parsed: Parse
         "  if (burst_left_{0} <= 0)".format(message_name),
         f"    burst_left_{message_name} = 1;",
         f"  burst_fast_{message_name} = use_fast;",
-        f"  cancelTimer(tmr_{message_name});",
+        f"  {_due_var(message_name)} = 0;",
         f"  send_{message_name}();",
         f"  burst_left_{message_name}--;",
         f"  if (burst_left_{message_name} > 0)",
-        f"    arm_{message_name}();",
+        f"    arm_{message_name}(timeNow());",
         "  else",
         f"    finish_burst_{message_name}();",
         "}",
@@ -1105,8 +1135,11 @@ def _build_finish_burst_function(
     if model.mux is not None:
         lines.append(f"  {_burst_mux_var(message_name)} = -1;")
     lines.append(f"  if ({send_type_expr} == {MSG_SEND_EVENT} || {send_type_expr} == {MSG_SEND_IF_ACTIVE})")
+    lines.append("  {")
+    lines.append(f"    {_due_var(message_name)} = 0;")
     lines.append("    return;")
-    lines.append(f"  arm_{message_name}();")
+    lines.append("  }")
+    lines.append(f"  arm_{message_name}(timeNow());")
     lines.append("}")
     lines.append("")
     return lines
@@ -1420,6 +1453,7 @@ def _build_can_file(
     # variables 块
     out.append("variables")
     out.append("{")
+    out.append("  msTimer tmr_sched;")
     for msg_cfg, model in messages:
         name = model.name
         frame_id = frame_ids.get(name)
@@ -1429,7 +1463,6 @@ def _build_can_file(
                 f"将使用符号名声明 message（若编译失败请检查 DBC 或报文名）"
             )
         out.append(_message_decl(name, frame_id))
-        out.append(f"  msTimer tmr_{name};")
         out.extend(_build_core_burst_timer_variables(name))
         if _counter_enabled(msg_cfg, model):
             out.append(f"  long cnt_{name};")
@@ -1464,6 +1497,7 @@ def _build_can_file(
                     exclude.add(sig)
         out.append(f"  burst_left_{name} = 0;")
         out.append(f"  burst_fast_{name} = 0;")
+        out.append(f"  {_due_var(name)} = 0;")
         if _message_needs_quiet(model, exclude):
             out.append(f"  {_quiet_var(name)} = 0;")
         if _has_msg_send_type(model):
@@ -1473,17 +1507,18 @@ def _build_can_file(
                 member = f"{signal.name}{suffix}"
                 out.append(f"  {_restore_pending_var(name, member)} = 0;")
             out.extend(_build_init_shadows(namespace, name, model, exclude))
-        # 无 MsgSendType 时按 Cycle：启动即装载周期定时器。
+        # 无 MsgSendType 时按 Cycle：启动即登记到期时刻。
         if _has_msg_send_type(model):
             out.append(f"  if ({_info_sysvar(namespace, name, '_MsgSendType', parsed, str(MSG_SEND_CYCLE))} != {MSG_SEND_EVENT}"
                        f" && {_info_sysvar(namespace, name, '_MsgSendType', parsed, str(MSG_SEND_CYCLE))} != {MSG_SEND_IF_ACTIVE})")
-            out.append(f"    arm_{name}();")
+            out.append(f"    arm_{name}(timeNow());")
         else:
-            out.append(f"  arm_{name}();")
+            out.append(f"  arm_{name}(timeNow());")
+    out.append(f"  setTimer(tmr_sched, {SCHEDULER_TICK_MS});")
     out.append("}")
     out.append("")
 
-    # 每条报文：burst / 装载 / 定时器 / 发送 / 填充
+    # 每条报文：burst / 装载 / 到期轮询 / 发送 / 填充
     for msg_cfg, model in messages:
         name = model.name
         exclude = set()
@@ -1497,7 +1532,7 @@ def _build_can_file(
             out.extend(_build_finish_burst_function(namespace, name, model, parsed, exclude))
         out.extend(_build_arm_function(namespace, name, parsed, has_msg_send_type=_has_msg_send_type(model)))
         out.extend(
-            _build_timer_handler(
+            _build_poll_function(
                 namespace,
                 name,
                 parsed,
@@ -1520,6 +1555,8 @@ def _build_can_file(
         )
         out.extend(_build_merged_sysvar_handlers(namespace, name, model, parsed, exclude))
 
+    out.extend(_build_scheduler_handler([model.name for _, model in messages]))
+
     return "\n".join(out) + "\n"
 
 
@@ -1529,23 +1566,25 @@ def _build_arm_function(
     parsed: ParsedSysvar,
     has_msg_send_type: bool = True,
 ) -> List[str]:
+    due = _due_var(message_name)
     cycle_expr = _info_sysvar(namespace, message_name, "_MsgCycleTime", parsed, "10")
+    ticks = CAPL_TIMENOW_TICKS_PER_MS
     if not has_msg_send_type:
         return [
-            f"void arm_{message_name}()",
+            f"void arm_{message_name}(long _now)",
             "{",
             "  long _ct;",
             f"  _ct = {cycle_expr};",
             "  if (_ct <= 0)",
             "    _ct = 10;",
-            f"  setTimer(tmr_{message_name}, _ct);",
+            f"  {due} = _now + _ct * {ticks};",
             "}",
             "",
         ]
     fast_expr = _info_sysvar(namespace, message_name, "_MsgCycleTimeFast", parsed, cycle_expr)
     send_type_expr = _info_sysvar(namespace, message_name, "_MsgSendType", parsed, str(MSG_SEND_CYCLE))
     return [
-        f"void arm_{message_name}()",
+        f"void arm_{message_name}(long _now)",
         "{",
         "  long _ct;",
         f"  if (({send_type_expr} == {MSG_SEND_EVENT} || {send_type_expr} == {MSG_SEND_IF_ACTIVE})"
@@ -1557,30 +1596,39 @@ def _build_arm_function(
         f"    _ct = {cycle_expr};",
         "  if (_ct <= 0)",
         "    _ct = 10;",
-        f"  setTimer(tmr_{message_name}, _ct);",
+        f"  {due} = _now + _ct * {ticks};",
         "}",
         "",
     ]
 
 
-def _build_timer_handler(
+def _build_poll_function(
     namespace: str,
     message_name: str,
     parsed: ParsedSysvar,
     has_burst_funcs: bool = True,
 ) -> List[str]:
+    due = _due_var(message_name)
     if not has_burst_funcs:
         return [
-            f"on timer tmr_{message_name}",
+            f"void poll_{message_name}(long now)",
             "{",
+            f"  if ({due} == 0)",
+            "    return;",
+            f"  if (now < {due})",
+            "    return;",
             f"  send_{message_name}();",
-            f"  arm_{message_name}();",
+            f"  arm_{message_name}(now);",
             "}",
             "",
         ]
     return [
-        f"on timer tmr_{message_name}",
+        f"void poll_{message_name}(long now)",
         "{",
+        f"  if ({due} == 0)",
+        "    return;",
+        f"  if (now < {due})",
+        "    return;",
         f"  send_{message_name}();",
         f"  if (burst_left_{message_name} > 0)",
         "  {",
@@ -1588,13 +1636,29 @@ def _build_timer_handler(
         f"    if (burst_left_{message_name} <= 0)",
         f"      finish_burst_{message_name}();",
         "    else",
-        f"      arm_{message_name}();",
+        f"      arm_{message_name}(timeNow());",
         "  }",
         "  else",
-        f"    arm_{message_name}();",
+        f"    arm_{message_name}(now);",
         "}",
         "",
     ]
+
+
+def _build_scheduler_handler(message_names: List[str]) -> List[str]:
+    """节点级 1ms 调度：先重装定时器，再用发送前的 timeNow 轮询各报文。"""
+    lines = [
+        "on timer tmr_sched",
+        "{",
+        "  long now;",
+        f"  setTimer(tmr_sched, {SCHEDULER_TICK_MS});",
+        "  now = timeNow();",
+    ]
+    for name in message_names:
+        lines.append(f"  poll_{name}(now);")
+    lines.append("}")
+    lines.append("")
+    return lines
 
 
 def _mux_ids_initializer(model: MessageModel) -> str:
