@@ -86,15 +86,15 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn("long mux_ids[] = {14};", content)
         self.assertIn("fill_Media_0x32B_group(mux_ids[i]);", content)
         self.assertIn("output_all_Media_0x32B_groups();", content)
-        self.assertNotIn("fill_Media_0x32B_group(14);", content)
         self.assertIn("output(msg_Media_0x32B);", content)
         self.assertIn("if (mux_id == 14)", content)
-        self.assertIn(f"== {MSG_SEND_EVENT}", content)
-        self.assertIn(f"== {MSG_SEND_IF_ACTIVE}", content)
-        self.assertIn("burst_mux_Media_0x32B = 14;", content)
-        self.assertIn(f"== {MSG_SEND_CE}", content)
-        self.assertIn(f"== {MSG_SEND_CA}", content)
-        self.assertIn("burst_left_Media_0x32B > 0", content)
+        self.assertIn("void poll_emit_Media_0x32B(long now)", content)
+        self.assertIn("void poll_prepare_Media_0x32B()", content)
+        self.assertIn("void emit_Media_0x32B()", content)
+        self.assertIn("msTimer tmr_sched;", content)
+        self.assertNotIn("begin_burst_Media_0x32B", content)
+        self.assertNotIn("burst_mux_Media_0x32B", content)
+        self.assertNotIn("g_prev_Media_0x32B_", content)
         self.assertNotIn("g_prev_Media_0x32B_Child_ID_32B_S_Pv", content)
         self.assertNotIn("@media::Media_0x32B.Child_ID_32B_S_Pv = 0;", content)
 
@@ -145,7 +145,6 @@ class CaplMuxGenerationTest(unittest.TestCase):
             "    {\n"
             "      fill_Media_0x32B_group(burst_mux_Media_0x32B);\n"
             "      output(msg_Media_0x32B);\n"
-            "      return;\n"
             "    }\n"
             "    return;\n"
             "  }",
@@ -190,8 +189,13 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertNotIn("burst_left_Media_0x32B <= 0) return;", content)
 
     def test_sysvar_quiet_blocks_restore_and_linkage_retrigger(self) -> None:
+        vsysvar = MUX_VSYSVAR.replace(
+            'Media_0x32B_MsgSendType" type="int" startValue="0"',
+            'Media_0x32B_MsgSendType" type="int" startValue="1"',
+            1,
+        )
         with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
-            fh.write(MUX_VSYSVAR)
+            fh.write(vsysvar)
             path = fh.name
 
         parsed = parse_vsysvar(path)
@@ -237,12 +241,12 @@ class CaplMuxGenerationTest(unittest.TestCase):
         msg_cfg = {"message_name": "Media_0x32B", "has_validation": False}
         content = _build_can_file("media", "Media", 1, [(msg_cfg, model)], parsed, {model.name: 0x32B})
         inactive = "@media::Media_0x32B.CSW_Enable_S_inactive_value"
-        self.assertIn("== 4 && @media::Media_0x32B.CSW_Enable_S_SigSendType != 0", content)
+        self.assertIn("@media::Media_0x32B.CSW_Enable_S_SigSendType != 0", content)
         self.assertIn("_old != _new", content)
         self.assertIn("@media::Media_0x32B.CSW_Enable_S_has_inactive_value == 1", content)
         self.assertIn(f"(_old == ({inactive}) && _new != ({inactive}))", content)
         self.assertIn(f"(_old != ({inactive}) && _new == ({inactive}))", content)
-        self.assertIn(f"== {MSG_SEND_CA}", content)
+        self.assertNotIn(f"== {MSG_SEND_CA}", content)
 
     def test_if_active_triggers_on_both_inactive_edges(self) -> None:
         vsysvar = MUX_VSYSVAR.replace(
@@ -270,10 +274,9 @@ class CaplMuxGenerationTest(unittest.TestCase):
         msg_cfg = {"message_name": "Media_0x32B", "has_validation": False}
         content = _build_can_file("media", "Media", 1, [(msg_cfg, model)], parsed, {model.name: 0x32B})
         inactive = "@media::Media_0x32B.CSW_Enable_S_inactive_value"
-        self.assertIn(f"== {MSG_SEND_IF_ACTIVE}", content)
-        self.assertIn("@media::Media_0x32B.CSW_Enable_S_has_inactive_value == 1", content)
         self.assertIn(f"(_old == ({inactive}) && _new != ({inactive}))", content)
         self.assertIn(f"(_old != ({inactive}) && _new == ({inactive}))", content)
+        self.assertNotIn(f"== {MSG_SEND_IF_ACTIVE}", content)
 
     def test_fill_uses_rv_not_pv_for_signal_assignment(self) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:

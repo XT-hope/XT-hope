@@ -98,7 +98,12 @@ class CaplCycleTimingGenerationTest(unittest.TestCase):
         self.assertIn("advance_due_Media_0x32B(now);", emit_poll)
 
     def test_begin_burst_still_uses_send(self) -> None:
-        content = self._generate(MUX_VSYSVAR)
+        vsysvar = MUX_VSYSVAR.replace(
+            'Media_0x32B_MsgSendType" type="int" startValue="0"',
+            'Media_0x32B_MsgSendType" type="int" startValue="1"',
+            1,
+        )
+        content = self._generate(vsysvar)
         begin = content[content.index("void begin_burst_Media_0x32B") :]
         begin = begin[: begin.index("\nvoid ")]
         self.assertIn("send_Media_0x32B();", begin)
