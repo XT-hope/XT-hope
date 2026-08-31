@@ -12,7 +12,7 @@ CAPL 生成器
     Cycle / Event / IfActive / CE / CA（数值与 DBC GenMsgSendType 一致：0~4）。
     若 .vsysvar 中没有 {Msg}_MsgSendType，按 Cycle 周期发送（_MsgCycleTime，缺省 10ms）。
     IfActive / CA：在 {Sig}_has_inactive_value==1 时，Pv/Rv 跨越 inactive（进入或离开）都触发 burst。
-- 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；报文对象 msg.信号 赋物理值。
+- 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；报文对象 msg.信号 赋原始值 Rv（与总线编码一致）。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
   时用 g_sv_quiet_* 计数器屏蔽 on sysvar，避免联动/恢复再次触发 burst。
@@ -548,8 +548,7 @@ def _format_float(text: Optional[str], default: str) -> str:
 def _phys_expr(raw_expr: str, factor_lit: str, offset_lit: str) -> str:
     """把一个 raw 值表达式转换为物理值表达式：raw*Factor + Offset。
 
-    报文对象的 msg.信号 赋的是物理值（CAPL 会自动编码成 raw 上总线），因此 raw 码
-    （special/inactive/counter/checksum 等）需先按各自 Factor/Offset 转成物理值。
+    用于 Pv/Rv 联动等需要物理量的场景。fill 中 msg.信号 直接赋 Rv，不经此函数。
     当 Factor==1 且 Offset==0 时直接返回原表达式，保持输出简洁。
     """
     f = (factor_lit or "1").strip()
@@ -664,15 +663,31 @@ def _mux_sysvar_member(namespace: str, message_name: str, mux: MuxMetadata) -> s
     return _sysvar(namespace, message_name, f"{mux_signal.name}_Rv")
 
 
+def _raw_from_pv_expr(pv_expr: str, factor_lit: str, offset_lit: str) -> str:
+    """仅有 Pv、无 Rv 时，由物理值反算 raw（与联动逻辑一致，四舍五入）。"""
+    f = (factor_lit or "1").strip()
+    o = (offset_lit or "0").strip()
+    q = f"(({pv_expr}) - ({o})) / ({f})"
+    return f"((({q}) >= 0) ? (long)(({q}) + 0.5) : (long)(({q}) - 0.5))"
+
+
+def _normal_raw_value_expr(namespace: str, message_name: str, signal: SignalModel) -> str:
+    """fill 时使用的普通信号 raw 值表达式。"""
+    factor_lit = _format_float(signal.factor, "1")
+    offset_lit = _format_float(signal.offset, "0")
+    if signal.has_rv:
+        return _sysvar(namespace, message_name, f"{signal.name}_Rv")
+    if signal.has_pv:
+        pv = _sysvar(namespace, message_name, f"{signal.name}_Pv")
+        return _raw_from_pv_expr(pv, factor_lit, offset_lit)
+    return "0"
+
+
 def _build_mux_signal_assignment(
     message_name: str, mux: MuxMetadata, mux_id_expr: str
 ) -> str:
     msg = _msg_var(message_name)
-    mux_signal = mux.mux_signal
-    factor_lit = _format_float(mux_signal.factor, "1")
-    offset_lit = _format_float(mux_signal.offset, "0")
-    phys = _phys_expr(mux_id_expr, factor_lit, offset_lit)
-    return f"  {msg}.{mux.mux_signal_name} = {phys};"
+    return f"  {msg}.{mux.mux_signal_name} = {mux_id_expr};"
 
 
 def _build_fill_function(
@@ -839,12 +854,11 @@ def _build_fill_body_lines(
         counter = model.get(counter_signal)
         cmin = _to_capl_number(counter.rv_min, "0")
         cmax = _to_capl_number(counter.rv_max, "255")
-        cnt_phys = _phys_expr(cnt_var, _format_float(counter.factor, "1"), _format_float(counter.offset, "0"))
         wrong_counter = _info_sysvar(namespace, message_name, "_WrongCounterFlag", parsed, "0")
         if model.info and model.info.has_wrong_counter_flag:
-            cnt_assign = f"({cnt_phys}) + (({wrong_counter} == 1) ? 1 : 0)"
+            cnt_assign = f"({cnt_var}) + (({wrong_counter} == 1) ? 1 : 0)"
         else:
-            cnt_assign = cnt_phys
+            cnt_assign = cnt_var
         lines.append(f"  {msg}.{counter_signal} = {cnt_assign};")
         lines.append(f"  if ({cnt_var} >= {cmax})")
         lines.append(f"    {cnt_var} = {cmin};")
@@ -855,9 +869,7 @@ def _build_fill_body_lines(
         method = (check_method or "crc16").strip().lower()
         params = check_parameters or {}
         chk = model.get(check_signal)
-        chk_factor = _format_float(chk.factor, "1")
         chk_offset = _format_float(chk.offset, "0")
-        crc_phys = _phys_expr("_crc", chk_factor, chk_offset)
         lines.append("")
         lines.append(f"  {msg}.{check_signal} = {chk_offset};")
         lines.append(f"  _n = {msg}.dlc;")
@@ -876,35 +888,25 @@ def _build_fill_body_lines(
         if model.info and model.info.has_wrong_crc_flag:
             lines.append(f"  if ({wrong_crc} == 1)")
             lines.append("    _crc = _crc + 1;")
-        lines.append(f"  {msg}.{check_signal} = {crc_phys};")
+        lines.append(f"  {msg}.{check_signal} = _crc;")
 
     return lines
 
 
 def _build_signal_assignment(namespace: str, message_name: str, signal: SignalModel) -> List[str]:
     msg = _msg_var(message_name)
-    # 报文对象的 msg.信号 赋的是物理值，CAPL 会按 DBC 自动编码成 raw 上总线。
+    # 报文对象 msg.信号 赋原始值 Rv，与总线编码一致。
     target = f"{msg}.{signal.name}"
-    factor_lit = _format_float(signal.factor, "1")
-    offset_lit = _format_float(signal.offset, "0")
-
-    # 普通取值用物理值 Pv；无 Pv 成员时退回用 Rv 换算成物理值。
-    if signal.has_pv:
-        normal_value = _sysvar(namespace, message_name, f"{signal.name}_Pv")
-    else:
-        rv = _sysvar(namespace, message_name, f"{signal.name}_Rv")
-        normal_value = _phys_expr(rv, factor_lit, offset_lit)
+    normal_value = _normal_raw_value_expr(namespace, message_name, signal)
 
     lines: List[str] = []
     branches: List[Tuple[str, str]] = []
-    # special：需同时满足 has_special_value==1 且 use_special_value==1。
+    # special：需同时满足 has_special_value==1 且 use_special_value==1；special_value 本身为 raw。
     if signal.has_special_value:
         has_special = _sysvar(namespace, message_name, f"{signal.name}_has_special_value")
         use_special = _sysvar(namespace, message_name, f"{signal.name}_use_special_value")
         special_value = _sysvar(namespace, message_name, f"{signal.name}_special_value")
-        branches.append(
-            (f"{has_special} == 1 && {use_special} == 1", _phys_expr(special_value, factor_lit, offset_lit))
-        )
+        branches.append((f"{has_special} == 1 && {use_special} == 1", special_value))
 
     if not branches:
         lines.append(f"  {target} = {normal_value};")
