@@ -16,10 +16,9 @@ CAPL 生成器
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
   时用 g_sv_quiet_* 计数器屏蔽 on sysvar，避免联动/恢复再次触发 burst。
-- 周期发送：节点共用 1ms 调度定时器 tmr_sched，每条报文用 due_* / last_tx_*（CAPL timeNow()，
-    单位 10µs，1ms=100）。正常间隔约一个周期（CANoe 实时下常见 8~11ms 抖动）。偶发漏 tick 时
-    若按原 10ms 格子补发，会在 ~19ms 后再出 2~3ms 的一帧；因此下次到期以实际发送时刻 + 周期
-    计算，且与上一帧间隔小于半个周期则只改期、不 output。
+- 周期发送：节点共用 1ms 调度器 tmr_sched。到期时先 output（数据在上一周期已 fill），再为下一帧 fill，
+    避免 fill/CRC 耗时把 10ms 帧推到 ~19ms。下次到期沿周期格子推进。2~3ms 连发不 output；8~11ms 保留。
+    不允许把 19ms 间隔当作恢复策略。
 - 多路复用报文：周期/CE/CA 发送（含正常周期与 CE/CA 的 E/A burst）均按 multiplexer_id
     从小到大连续 output 全部子 ID（无 delay）；纯 Event / IfActive burst 仅发送触发信号所属 group。
   Mux 开关信号不参与 burst 触发与影子恢复；其报文值由 fill_group(mux_id) 驱动，与用户 sysvar 赋值互不干扰。
@@ -45,10 +44,10 @@ MSG_SEND_IF_ACTIVE = 2
 MSG_SEND_CE = 3
 MSG_SEND_CA = 4
 
-# CAPL timeNow() 单位为 10µs，1ms = 100 ticks。调度按实际发送时刻加周期，不追赶漏掉的格子。
+# CAPL timeNow() 单位为 10µs，1ms = 100 ticks。周期到期沿格子推进，先 output 再 fill 下一帧。
 CAPL_TIMENOW_TICKS_PER_MS = 100
 SCHEDULER_TICK_MS = 1
-# 半周期（ticks/ms）：10ms 周期则最小间隔 5ms，挡住 2~3ms 补发，放行 8~11ms 正常抖动。
+# 半周期（ticks/ms）：10ms 周期则最小间隔 5ms，挡住 2~3ms 连发，放行 8~11ms。
 CAPL_MIN_GAP_TICKS_PER_MS = CAPL_TIMENOW_TICKS_PER_MS // 2
 
 
@@ -57,15 +56,20 @@ def capl_ms_to_timenow_ticks(cycle_ms: int) -> int:
     return int(cycle_ms) * CAPL_TIMENOW_TICKS_PER_MS
 
 
-def next_cyclic_due_ticks(now_ticks: int, period_ticks: int) -> int:
-    """漏 tick 后的下次到期：从本次实际 now 再加一个周期，不补原格子上的那一帧。"""
+def advance_due_on_grid(due_ticks: int, now_ticks: int, period_ticks: int) -> int:
+    """周期格子前进一步。now 略晚于 due 时下一拍仍落在原格子，避免越走越偏。"""
     if period_ticks <= 0:
         period_ticks = capl_ms_to_timenow_ticks(10)
-    return now_ticks + period_ticks
+    if due_ticks <= 0:
+        return now_ticks + period_ticks
+    due_ticks = due_ticks + period_ticks
+    while due_ticks <= now_ticks:
+        due_ticks += period_ticks
+    return due_ticks
 
 
 def is_cyclic_catchup_gap(now_ticks: int, last_tx_ticks: int, period_ticks: int) -> bool:
-    """上一帧之后不足半个周期：视为漏 tick 后的连发补帧，应当丢弃。"""
+    """上一帧之后不足半个周期：2~3ms 连发，应当丢弃。8~11ms 不算连发。"""
     if last_tx_ticks == 0 or period_ticks <= 0:
         return False
     gap = now_ticks - last_tx_ticks
@@ -1064,11 +1068,17 @@ def _last_tx_var(message_name: str) -> str:
     return f"last_tx_{message_name}"
 
 
+def _need_fill_var(message_name: str) -> str:
+    """本拍已 output，需要在调度器第二阶段 fill 下一帧。"""
+    return f"need_fill_{message_name}"
+
+
 def _build_core_burst_timer_variables(message_name: str) -> List[str]:
-    """arm / poll / send 始终引用 due / last_tx / burst_left / burst_fast。"""
+    """arm / poll / emit 使用的调度变量。"""
     return [
         f"  long {_due_var(message_name)};",
         f"  long {_last_tx_var(message_name)};",
+        f"  long {_need_fill_var(message_name)};",
         f"  long burst_left_{message_name};",
         f"  long burst_fast_{message_name};",
     ]
@@ -1153,6 +1163,8 @@ def _build_finish_burst_function(
     lines.append("    return;")
     lines.append("  }")
     lines.append(f"  arm_{message_name}(timeNow());")
+    if model.mux is None:
+        lines.append(f"  fill_{message_name}();")
     lines.append("}")
     lines.append("")
     return lines
@@ -1512,6 +1524,7 @@ def _build_can_file(
         out.append(f"  burst_fast_{name} = 0;")
         out.append(f"  {_due_var(name)} = 0;")
         out.append(f"  {_last_tx_var(name)} = 0;")
+        out.append(f"  {_need_fill_var(name)} = 0;")
         if _message_needs_quiet(model, exclude):
             out.append(f"  {_quiet_var(name)} = 0;")
         if _has_msg_send_type(model):
@@ -1521,13 +1534,19 @@ def _build_can_file(
                 member = f"{signal.name}{suffix}"
                 out.append(f"  {_restore_pending_var(name, member)} = 0;")
             out.extend(_build_init_shadows(namespace, name, model, exclude))
-        # 无 MsgSendType 时按 Cycle：启动即登记到期时刻。
+        # 无 MsgSendType 时按 Cycle：登记到期时刻，并预先 fill，到期只 output。
         if _has_msg_send_type(model):
             out.append(f"  if ({_info_sysvar(namespace, name, '_MsgSendType', parsed, str(MSG_SEND_CYCLE))} != {MSG_SEND_EVENT}"
                        f" && {_info_sysvar(namespace, name, '_MsgSendType', parsed, str(MSG_SEND_CYCLE))} != {MSG_SEND_IF_ACTIVE})")
+            out.append("  {")
             out.append(f"    arm_{name}(timeNow());")
+            if not _is_mux_message(model):
+                out.append(f"    fill_{name}();")
+            out.append("  }")
         else:
             out.append(f"  arm_{name}(timeNow());")
+            if not _is_mux_message(model):
+                out.append(f"  fill_{name}();")
     out.append(f"  setTimer(tmr_sched, {SCHEDULER_TICK_MS});")
     out.append("}")
     out.append("")
@@ -1545,14 +1564,18 @@ def _build_can_file(
             out.extend(_build_begin_burst_function(namespace, name, parsed))
             out.extend(_build_finish_burst_function(namespace, name, model, parsed, exclude))
         out.extend(_build_arm_function(namespace, name, parsed, has_msg_send_type=_has_msg_send_type(model)))
+        out.extend(_build_advance_due_function(namespace, name, parsed))
+        out.extend(_build_emit_function(namespace, dbc_name, sender_node, name, model, parsed))
         out.extend(
-            _build_poll_function(
+            _build_poll_emit_function(
                 namespace,
                 name,
                 parsed,
                 has_burst_funcs=_has_msg_send_type(model),
+                is_mux=_is_mux_message(model),
             )
         )
+        out.extend(_build_poll_prepare_function(name, is_mux=_is_mux_message(model)))
         out.extend(_build_send_function(namespace, dbc_name, sender_node, name, model, parsed))
         out.extend(
             _build_fill_function(
@@ -1616,13 +1639,69 @@ def _build_arm_function(
     ]
 
 
+def _build_advance_due_function(
+    namespace: str,
+    message_name: str,
+    parsed: ParsedSysvar,
+) -> List[str]:
+    """沿周期格子前进一步：due += 周期，若已落后则跳到 now 之后的下一格。"""
+    due = _due_var(message_name)
+    cycle_expr = _info_sysvar(namespace, message_name, "_MsgCycleTime", parsed, "10")
+    ticks = CAPL_TIMENOW_TICKS_PER_MS
+    return [
+        f"void advance_due_{message_name}(long now)",
+        "{",
+        "  long _ct;",
+        "  long _period;",
+        f"  _ct = {cycle_expr};",
+        "  if (_ct <= 0)",
+        "    _ct = 10;",
+        f"  _period = _ct * {ticks};",
+        f"  {due} = {due} + _period;",
+        f"  while ({due} <= now)",
+        f"    {due} = {due} + _period;",
+        "}",
+        "",
+    ]
+
+
+def _build_emit_function(
+    namespace: str,
+    dbc_name: str,
+    sender_node: str,
+    message_name: str,
+    model: MessageModel,
+    parsed: ParsedSysvar,
+) -> List[str]:
+    """周期到期时只 output，fill 已在上一拍完成。Mux 仍走 output_all（内部 fill+output）。"""
+    info = _info_var(message_name)
+    node_info = f"{dbc_name}_Node_Info"
+    node_on = f"{dbc_name}_Node_On"
+    msg = _msg_var(message_name)
+    lines = [f"void emit_{message_name}()", "{"]
+    if node_on in parsed.variable_names:
+        lines.append(f"  if ({_sysvar(namespace, node_on)} != 1) return;")
+    if f"{sender_node}_MsgOn" in parsed.member_names:
+        lines.append(f"  if ({_sysvar(namespace, node_info, sender_node + '_MsgOn')} != 1) return;")
+    if info in parsed.variable_names:
+        lines.append(f"  if ({_sysvar(namespace, info, message_name + '_MsgOn')} != 1) return;")
+        lines.append(f"  if ({_sysvar(namespace, info, message_name + '_MsgOff')} == 1) return;")
+    if model.mux is not None:
+        _append_mux_send_all_groups_lines(lines, message_name)
+    else:
+        lines.append(f"  output({msg});")
+    lines.append("}")
+    lines.append("")
+    return lines
+
+
 def _build_poll_min_gap_guard_lines(
     namespace: str,
     message_name: str,
     parsed: ParsedSysvar,
     indent: str = "  ",
 ) -> List[str]:
-    """与上一帧间隔小于半个周期则只改期、不发送（丢掉 2~3ms 补发）。"""
+    """与上一帧间隔小于半个周期则只改期、不 output（丢掉 2~3ms 连发）。"""
     last = _last_tx_var(message_name)
     cycle_expr = _info_sysvar(namespace, message_name, "_MsgCycleTime", parsed, "10")
     half = CAPL_MIN_GAP_TICKS_PER_MS
@@ -1636,28 +1715,30 @@ def _build_poll_min_gap_guard_lines(
         f"{indent}  _gap = now - {last};",
         f"{indent}  if (_gap >= 0 && _gap < _min)",
         f"{indent}  {{",
-        f"{indent}    arm_{message_name}(now);",
+        f"{indent}    advance_due_{message_name}(now);",
         f"{indent}    return;",
         f"{indent}  }}",
         f"{indent}}}",
     ]
 
 
-def _build_poll_function(
+def _build_poll_emit_function(
     namespace: str,
     message_name: str,
     parsed: ParsedSysvar,
     has_burst_funcs: bool = True,
+    is_mux: bool = False,
 ) -> List[str]:
     due = _due_var(message_name)
     last = _last_tx_var(message_name)
+    need = _need_fill_var(message_name)
     decls = [
         "  long _ct;",
         "  long _min;",
         "  long _gap;",
     ]
     head = [
-        f"void poll_{message_name}(long now)",
+        f"void poll_emit_{message_name}(long now)",
         "{",
         *decls,
         f"  if ({due} == 0)",
@@ -1666,40 +1747,62 @@ def _build_poll_function(
         "    return;",
     ]
     if not has_burst_funcs:
-        return [
-            *head,
+        cyclic_body = [
             *_build_poll_min_gap_guard_lines(namespace, message_name, parsed),
-            f"  send_{message_name}();",
+            f"  emit_{message_name}();",
             f"  {last} = now;",
-            f"  arm_{message_name}(now);",
-            "}",
-            "",
+            f"  advance_due_{message_name}(now);",
         ]
+        if not is_mux:
+            cyclic_body.append(f"  {need} = 1;")
+        return [*head, *cyclic_body, "}", ""]
+    extra = [] if is_mux else [f"  {need} = 1;"]
     return [
         *head,
-        f"  if (burst_left_{message_name} <= 0)",
-        "  {",
-        *_build_poll_min_gap_guard_lines(namespace, message_name, parsed, indent="    "),
-        "  }",
-        f"  send_{message_name}();",
-        f"  {last} = now;",
         f"  if (burst_left_{message_name} > 0)",
         "  {",
+        f"    send_{message_name}();",
+        f"    {last} = now;",
         f"    burst_left_{message_name}--;",
         f"    if (burst_left_{message_name} <= 0)",
         f"      finish_burst_{message_name}();",
         "    else",
         f"      arm_{message_name}(timeNow());",
+        "    return;",
         "  }",
-        "  else",
-        f"    arm_{message_name}(now);",
+        *_build_poll_min_gap_guard_lines(namespace, message_name, parsed),
+        f"  emit_{message_name}();",
+        f"  {last} = now;",
+        f"  advance_due_{message_name}(now);",
+        *extra,
+        "}",
+        "",
+    ]
+
+
+def _build_poll_prepare_function(message_name: str, is_mux: bool = False) -> List[str]:
+    need = _need_fill_var(message_name)
+    if is_mux:
+        return [
+            f"void poll_prepare_{message_name}()",
+            "{",
+            "}",
+            "",
+        ]
+    return [
+        f"void poll_prepare_{message_name}()",
+        "{",
+        f"  if ({need} == 0)",
+        "    return;",
+        f"  fill_{message_name}();",
+        f"  {need} = 0;",
         "}",
         "",
     ]
 
 
 def _build_scheduler_handler(message_names: List[str]) -> List[str]:
-    """节点级 1ms 调度：先重装定时器，再用发送前的 timeNow 轮询各报文。"""
+    """先重装 1ms 定时器，再对所有到期报文 output，最后才 fill 下一帧。"""
     lines = [
         "on timer tmr_sched",
         "{",
@@ -1708,7 +1811,9 @@ def _build_scheduler_handler(message_names: List[str]) -> List[str]:
         "  now = timeNow();",
     ]
     for name in message_names:
-        lines.append(f"  poll_{name}(now);")
+        lines.append(f"  poll_emit_{name}(now);")
+    for name in message_names:
+        lines.append(f"  poll_prepare_{name}();")
     lines.append("}")
     lines.append("")
     return lines

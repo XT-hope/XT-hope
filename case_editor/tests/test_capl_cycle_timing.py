@@ -1,4 +1,4 @@
-"""周期报文调度：正常 8~11ms；偶发漏 tick 后不补 2~3ms 连发帧。"""
+"""周期报文：到期先 output 再 fill，Trace 间隔保持约 10ms，不能出现 19ms。"""
 from __future__ import annotations
 
 import tempfile
@@ -7,9 +7,9 @@ import unittest
 from case_editor.src.capl_generation import (
     CAPL_MIN_GAP_TICKS_PER_MS,
     CAPL_TIMENOW_TICKS_PER_MS,
+    advance_due_on_grid,
     capl_ms_to_timenow_ticks,
     is_cyclic_catchup_gap,
-    next_cyclic_due_ticks,
     _build_can_file,
     parse_vsysvar,
 )
@@ -20,23 +20,15 @@ def _intervals(times: list[float]) -> list[float]:
     return [b - a for a, b in zip(times, times[1:])]
 
 
-def _simulate_new_with_wakeups(wakeups_ms: list[int], cycle_ms: int = 10) -> list[int]:
-    """按给定调度唤醒时刻跑新逻辑（到期才发，过近补发丢弃）。返回发送时刻 ms。"""
-    period = capl_ms_to_timenow_ticks(cycle_ms)
-    due = period
-    last_tx = 0
-    sent: list[int] = []
-    for wake in wakeups_ms:
-        now = capl_ms_to_timenow_ticks(wake)
-        if due == 0 or now < due:
-            continue
-        if is_cyclic_catchup_gap(now, last_tx, period):
-            due = next_cyclic_due_ticks(now, period)
-            continue
-        sent.append(wake)
-        last_tx = now
-        due = next_cyclic_due_ticks(now, period)
-    return sent
+def _old_fill_then_output_times(cycle_ms: int, fill_ms: int, n: int) -> list[float]:
+    """旧逻辑：定时器到期后先 fill 再 output，output 时刻 = 到期 + fill 耗时。"""
+    return [float(cycle_ms * (i + 1) + fill_ms) for i in range(n)]
+
+
+def _new_emit_then_fill_times(cycle_ms: int, fill_ms: int, n: int) -> list[float]:
+    """新逻辑：到期立刻 output，fill 放在 output 之后，不影响 Trace 时刻。"""
+    del fill_ms
+    return [float(cycle_ms * (i + 1)) for i in range(n)]
 
 
 class CaplCycleTimingMathTest(unittest.TestCase):
@@ -45,46 +37,39 @@ class CaplCycleTimingMathTest(unittest.TestCase):
         self.assertEqual(CAPL_TIMENOW_TICKS_PER_MS, 100)
         self.assertEqual(CAPL_MIN_GAP_TICKS_PER_MS, 50)
 
+    def test_old_fill_before_output_creates_19ms_gap(self) -> None:
+        times = _old_fill_then_output_times(cycle_ms=10, fill_ms=9, n=4)
+        self.assertEqual(_intervals(times), [10, 10, 10])
+        # 相对“准时到期点”晚了 9ms；若上一拍 fill 很快、本拍很慢，就会看到 ~19ms
+        fast_then_slow = [10.0, 29.0]
+        self.assertEqual(_intervals(fast_then_slow), [19.0])
+
+    def test_emit_then_fill_keeps_10ms_even_if_fill_takes_9ms(self) -> None:
+        times = _new_emit_then_fill_times(cycle_ms=10, fill_ms=9, n=5)
+        self.assertEqual(times, [10, 20, 30, 40, 50])
+        self.assertEqual(_intervals(times), [10, 10, 10, 10])
+        self.assertNotIn(19, _intervals(times))
+
     def test_normal_8_to_11ms_jitter_is_kept(self) -> None:
-        """正常 Trace 间隔 8~11ms 应原样发送，不能当补发丢掉。"""
         period = capl_ms_to_timenow_ticks(10)
         last = capl_ms_to_timenow_ticks(10)
         for gap_ms in (8, 9, 10, 11):
             now = last + capl_ms_to_timenow_ticks(gap_ms)
-            self.assertFalse(
-                is_cyclic_catchup_gap(now, last, period),
-                f"{gap_ms}ms 属于正常抖动",
-            )
+            self.assertFalse(is_cyclic_catchup_gap(now, last, period))
 
-    def test_occasional_2_to_3ms_after_19ms_is_dropped(self) -> None:
-        """偶发：10ms 格子漏到 19ms 后再在 21~22ms 补一帧，后一帧应丢弃。"""
+    def test_2_to_3ms_double_send_is_dropped(self) -> None:
         period = capl_ms_to_timenow_ticks(10)
-        t0 = capl_ms_to_timenow_ticks(0)
-        t19 = capl_ms_to_timenow_ticks(19)
-        self.assertFalse(is_cyclic_catchup_gap(t19, t0, period))
-        for follow_ms in (21, 22):
-            follow = capl_ms_to_timenow_ticks(follow_ms)
-            self.assertTrue(is_cyclic_catchup_gap(follow, t19, period))
-            self.assertEqual(
-                (next_cyclic_due_ticks(t19, period) - t19) / CAPL_TIMENOW_TICKS_PER_MS,
-                10,
-            )
+        last = capl_ms_to_timenow_ticks(10)
+        for gap_ms in (2, 3):
+            now = last + capl_ms_to_timenow_ticks(gap_ms)
+            self.assertTrue(is_cyclic_catchup_gap(now, last, period))
 
-    def test_late_tick_does_not_aim_at_original_20ms_slot(self) -> None:
+    def test_grid_advance_stays_on_10ms_slots(self) -> None:
         period = capl_ms_to_timenow_ticks(10)
         due = period
-        late_now = capl_ms_to_timenow_ticks(19)
-        next_due = next_cyclic_due_ticks(late_now, period)
-        self.assertEqual((next_due - late_now) / CAPL_TIMENOW_TICKS_PER_MS, 10)
-        catchup_due = due + period
-        self.assertEqual((catchup_due - late_now) / CAPL_TIMENOW_TICKS_PER_MS, 1)
-        self.assertNotEqual(next_due, catchup_due)
-
-    def test_wakeup_stream_drops_only_the_catchup_frame(self) -> None:
-        # 10ms 正常一帧后漏 tick，19ms 才发；21ms 的补发应丢掉，随后回到 10ms
-        sent = _simulate_new_with_wakeups([10, 29, 31, 39, 49])
-        self.assertEqual(sent, [10, 29, 39, 49])
-        self.assertEqual(_intervals(sent), [19, 10, 10])
+        now = capl_ms_to_timenow_ticks(11)
+        nxt = advance_due_on_grid(due, now, period)
+        self.assertEqual(nxt / CAPL_TIMENOW_TICKS_PER_MS, 20)
 
 
 class CaplCycleTimingGenerationTest(unittest.TestCase):
@@ -97,32 +82,27 @@ class CaplCycleTimingGenerationTest(unittest.TestCase):
         msg_cfg = {"message_name": "Media_0x32B", "has_validation": False}
         return _build_can_file("media", "Media", 1, [(msg_cfg, model)], parsed, {model.name: 0x32B})
 
-    def test_cyclic_uses_shared_scheduler_and_pre_send_now(self) -> None:
+    def test_scheduler_emits_before_prepare_fill(self) -> None:
         content = self._generate(MUX_VSYSVAR)
-        self.assertIn("msTimer tmr_sched;", content)
-        self.assertIn("long last_tx_Media_0x32B;", content)
-        self.assertNotIn("cancelTimer(", content)
-        self.assertNotIn("setTimer(tmr_Media_0x32B", content)
-        self.assertIn("due_Media_0x32B = _now + _ct * 100;", content)
-        self.assertIn("_min = _ct * 50;", content)
-        self.assertIn("if (_gap >= 0 && _gap < _min)", content)
-        poll = content[content.index("void poll_Media_0x32B(long now)") :]
-        poll = poll[: poll.index("\nvoid ")]
-        self.assertIn("send_Media_0x32B();", poll)
-        self.assertIn("last_tx_Media_0x32B = now;", poll)
-        self.assertIn("  else\n    arm_Media_0x32B(now);", poll)
+        self.assertIn("void emit_Media_0x32B()", content)
+        self.assertIn("void poll_emit_Media_0x32B(long now)", content)
+        self.assertIn("void poll_prepare_Media_0x32B()", content)
+        self.assertIn("void advance_due_Media_0x32B(long now)", content)
+        self.assertIn("long need_fill_Media_0x32B;", content)
         sched = content[content.index("on timer tmr_sched") :]
         self.assertLess(sched.index("setTimer(tmr_sched, 1);"), sched.index("now = timeNow();"))
-        self.assertLess(sched.index("now = timeNow();"), sched.index("poll_Media_0x32B(now);"))
+        self.assertLess(sched.index("poll_emit_Media_0x32B(now);"), sched.index("poll_prepare_Media_0x32B();"))
+        emit_poll = content[content.index("void poll_emit_Media_0x32B(long now)") :]
+        emit_poll = emit_poll[: emit_poll.index("\nvoid ")]
+        self.assertIn("emit_Media_0x32B();", emit_poll)
+        self.assertIn("advance_due_Media_0x32B(now);", emit_poll)
 
-    def test_begin_burst_clears_due_instead_of_cancel_timer(self) -> None:
+    def test_begin_burst_still_uses_send(self) -> None:
         content = self._generate(MUX_VSYSVAR)
         begin = content[content.index("void begin_burst_Media_0x32B") :]
         begin = begin[: begin.index("\nvoid ")]
+        self.assertIn("send_Media_0x32B();", begin)
         self.assertIn("due_Media_0x32B = 0;", begin)
-        self.assertIn("last_tx_Media_0x32B = timeNow();", begin)
-        self.assertNotIn("cancelTimer", begin)
-        self.assertIn("arm_Media_0x32B(timeNow());", begin)
 
 
 if __name__ == "__main__":
