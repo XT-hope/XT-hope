@@ -172,12 +172,13 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertNotIn("g_prev_Media_0x32B_", content)
         self.assertNotIn("finish_burst_Media_0x32B", content)
         self.assertNotIn("begin_burst_Media_0x32B", content)
-        # 无 MsgSendType：按 Cycle 启动周期定时器，timer 只 send+arm
+        # 无 MsgSendType：按 Cycle 启动周期定时器（setTimerCyclic），timer 只 send
         self.assertIn("  arm_Media_0x32B();", content)
         self.assertIn(
-            "on timer tmr_Media_0x32B\n{\n  send_Media_0x32B();\n  arm_Media_0x32B();\n}",
+            "on timer tmr_Media_0x32B\n{\n  send_Media_0x32B();\n}",
             content,
         )
+        self.assertIn("setTimerCyclic(tmr_Media_0x32B, _ct);", content)
         self.assertIn("  _ct = @media::Media_0x32B_Info.Media_0x32B_MsgCycleTime;", content)
         self.assertNotIn("burst_left_Media_0x32B <= 0) return;", content)
 
@@ -235,6 +236,37 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn(f"(_old == ({inactive}) && _new != ({inactive}))", content)
         self.assertIn(f"(_old != ({inactive}) && _new == ({inactive}))", content)
         self.assertIn(f"== {MSG_SEND_CA}", content)
+
+    def test_cycle_timer_arms_before_send_when_msg_send_type_present(self) -> None:
+        with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
+            fh.write(MUX_VSYSVAR)
+            path = fh.name
+
+        parsed = parse_vsysvar(path)
+        model = parsed.messages["Media_0x32B"]
+        msg_cfg = {"message_name": "Media_0x32B", "has_validation": False}
+        content = _build_can_file("media", "Media", 1, [(msg_cfg, model)], parsed, {model.name: 0x32B})
+
+        self.assertIn(
+            "on timer tmr_Media_0x32B\n"
+            "{\n"
+            "  if (burst_left_Media_0x32B > 0)\n"
+            "  {\n"
+            "    send_Media_0x32B();\n"
+            "    burst_left_Media_0x32B--;\n"
+            "    if (burst_left_Media_0x32B <= 0)\n"
+            "      finish_burst_Media_0x32B();\n"
+            "    else\n"
+            "      arm_Media_0x32B();\n"
+            "  }\n"
+            "  else\n"
+            "  {\n"
+            "    arm_Media_0x32B();\n"
+            "    send_Media_0x32B();\n"
+            "  }\n"
+            "}",
+            content,
+        )
 
     def test_if_active_triggers_on_both_inactive_edges(self) -> None:
         vsysvar = MUX_VSYSVAR.replace(

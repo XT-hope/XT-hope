@@ -11,6 +11,8 @@ CAPL 生成器
 - 每个报文按系统变量进行模拟发送，支持 MsgSendType：
     Cycle / Event / IfActive / CE / CA（数值与 DBC GenMsgSendType 一致：0~4）。
     若 .vsysvar 中没有 {Msg}_MsgSendType，按 Cycle 周期发送（_MsgCycleTime，缺省 10ms）。
+    周期定时：无 MsgSendType 时用 setTimerCyclic；有 MsgSendType 的常规周期在 on timer 中先 arm 再 send，
+    避免 fill/output/CRC 耗时被累加进周期间隔导致帧间隔抖动。
     IfActive / CA：在 {Sig}_has_inactive_value==1 时，Pv/Rv 跨越 inactive（进入或离开）都触发 burst。
 - 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；报文对象 msg.信号 赋物理值。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
@@ -1529,6 +1531,8 @@ def _build_arm_function(
 ) -> List[str]:
     cycle_expr = _info_sysvar(namespace, message_name, "_MsgCycleTime", parsed, "10")
     if not has_msg_send_type:
+        # 纯周期报文：setTimerCyclic 由 CANoe 引擎按固定节拍触发，避免 send 后再 setTimer
+        # 把 fill/output/CRC 等耗时累加进周期间隔（典型表现：29ms + 3ms 交替抖动）。
         return [
             f"void arm_{message_name}()",
             "{",
@@ -1536,7 +1540,7 @@ def _build_arm_function(
             f"  _ct = {cycle_expr};",
             "  if (_ct <= 0)",
             "    _ct = 10;",
-            f"  setTimer(tmr_{message_name}, _ct);",
+            f"  setTimerCyclic(tmr_{message_name}, _ct);",
             "}",
             "",
         ]
@@ -1568,20 +1572,21 @@ def _build_timer_handler(
     has_burst_funcs: bool = True,
 ) -> List[str]:
     if not has_burst_funcs:
+        # 周期由 setTimerCyclic 维持，handler 只负责发送。
         return [
             f"on timer tmr_{message_name}",
             "{",
             f"  send_{message_name}();",
-            f"  arm_{message_name}();",
             "}",
             "",
         ]
+    # burst 期间仍用单次 setTimer；常规周期路径在 send 前先 arm，避免发送耗时拉长周期间隔。
     return [
         f"on timer tmr_{message_name}",
         "{",
-        f"  send_{message_name}();",
         f"  if (burst_left_{message_name} > 0)",
         "  {",
+        f"    send_{message_name}();",
         f"    burst_left_{message_name}--;",
         f"    if (burst_left_{message_name} <= 0)",
         f"      finish_burst_{message_name}();",
@@ -1589,7 +1594,10 @@ def _build_timer_handler(
         f"      arm_{message_name}();",
         "  }",
         "  else",
+        "  {",
         f"    arm_{message_name}();",
+        f"    send_{message_name}();",
+        "  }",
         "}",
         "",
     ]
