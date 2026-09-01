@@ -291,7 +291,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn("msg_Media_0x32B.CSW_Enable_S = @media::Media_0x32B.CSW_Enable_S_Rv;", content)
         self.assertNotIn("CSW_Enable_S_Pv;", content)
 
-    def test_crc_uses_message_parameter_without_data_copy(self) -> None:
+    def test_crc_uses_byte_array_for_checksum_lib(self) -> None:
         from case_editor.src.capl_generation import CHECKSUM_LIB, _build_fill_plain_function
 
         self.assertIn("word PROJ_CRC16_CCITT(byte data[], long len", CHECKSUM_LIB)
