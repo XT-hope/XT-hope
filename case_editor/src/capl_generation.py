@@ -12,7 +12,8 @@ CAPL 生成器
     Cycle / Event / IfActive / CE / CA（数值与 DBC GenMsgSendType 一致：0~4）。
     发送类型在生成期从 .vsysvar 的 {Msg}_MsgSendType 起始值解析，按类型生成对应 CAPL，
     运行时不判断报文发送类型。无 {Msg}_MsgSendType 时按纯周期调度（_MsgCycleTime，缺省 10ms）。
-- 周期发送：每条报文独立 msTimer，到期 send（fill + output）后重新 arm。
+- 周期发送：每条报文独立 msTimer。普通报文/单 group Mux 到期先 output（emit）再 fill，避免 fill 耗时拖后 Trace 时刻；
+  多 group Mux 同一 tick 内需逐 ID fill+output，仍走 send()。
     IfActive / CA：在 {Sig}_has_inactive_value==1 时，Pv/Rv 跨越 inactive（进入或离开）都触发 burst。
 - 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；报文对象 msg.信号 赋 raw 值（Rv）。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
@@ -1133,6 +1134,39 @@ def _has_burst_triggers(model: MessageModel) -> bool:
     return _needs_burst_support(model)
 
 
+def _is_mux_multi_group(model: MessageModel) -> bool:
+    return model.mux is not None and len(model.mux.groups) > 1
+
+
+def _build_fill_invoke_lines(message_name: str, model: MessageModel, indent: str = "  ") -> List[str]:
+    if model.mux is None:
+        return [f"{indent}fill_{message_name}();"]
+    if len(model.mux.groups) == 1:
+        return [f"{indent}fill_{message_name}_group({model.mux.groups[0]});"]
+    return [f"{indent}prepare_all_{message_name}_groups();"]
+
+
+def _build_mux_prepare_all_groups_function(message_name: str, model: MessageModel) -> List[str]:
+    """多路复用报文按全部 multiplexer_id 连续 fill（不发 output）。"""
+    if model.mux is None:
+        return []
+    groups = model.mux.groups
+    ids_literal = ", ".join(str(g) for g in groups)
+    lines = [
+        f"void prepare_all_{message_name}_groups()",
+        "{",
+        "  int i;",
+        f"  long mux_ids[{len(groups)}] = {{{ids_literal}}};",
+        f"  for (i = 0; i < {len(groups)}; i++)",
+        "  {",
+        f"    fill_{message_name}_group(mux_ids[i]);",
+        "  }",
+        "}",
+        "",
+    ]
+    return lines
+
+
 def _build_mux_output_all_groups_function(message_name: str, model: MessageModel) -> List[str]:
     """生成多路复用报文按全部 multiplexer_id 连续 output 的辅助函数。"""
     if model.mux is None:
@@ -1422,11 +1456,7 @@ def _build_timer_variables(message_name: str) -> List[str]:
 
 
 def _build_initial_prepare_call(namespace: str, message_name: str, model: MessageModel) -> List[str]:
-    if model.mux is not None and len(model.mux.groups) == 1:
-        return [f"  fill_{message_name}_group({model.mux.groups[0]});"]
-    if model.mux is not None:
-        return []
-    return [f"  fill_{message_name}();"]
+    return _build_fill_invoke_lines(message_name, model)
 
 
 def _build_can_file(
@@ -1519,12 +1549,19 @@ def _build_can_file(
                 if sig:
                     exclude.add(sig)
         if model.mux is not None:
+            if _is_mux_multi_group(model):
+                out.extend(_build_mux_prepare_all_groups_function(name, model))
             out.extend(_build_mux_output_all_groups_function(name, model))
         if _needs_burst_support(model):
             out.extend(_build_begin_burst_function(namespace, name, parsed, model))
             out.extend(_build_finish_burst_function(namespace, name, model, parsed, exclude))
         out.extend(_build_arm_function(namespace, name, parsed, model))
-        out.extend(_build_timer_handler(name, model))
+        out.extend(
+            _build_emit_function(namespace, dbc_name, sender_node, name, model, parsed)
+        )
+        out.extend(
+            _build_timer_handler(namespace, dbc_name, sender_node, name, model, parsed)
+        )
         out.extend(_build_send_function(namespace, dbc_name, sender_node, name, model, parsed))
         out.extend(
             _build_fill_function(
@@ -1587,13 +1624,54 @@ def _build_arm_function(
     return lines
 
 
-def _build_timer_handler(message_name: str, model: MessageModel) -> List[str]:
+def _build_emit_function(
+    namespace: str,
+    dbc_name: str,
+    sender_node: str,
+    message_name: str,
+    model: MessageModel,
+    parsed: ParsedSysvar,
+) -> List[str]:
+    msg = _msg_var(message_name)
+    lines = [f"void emit_{message_name}()", "{"]
+    _append_send_gate_lines(lines, namespace, dbc_name, sender_node, message_name, parsed)
+    lines.append(f"  output({msg});")
+    lines.append("}")
+    lines.append("")
+    return lines
+
+
+def _build_timer_handler(
+    namespace: str,
+    dbc_name: str,
+    sender_node: str,
+    message_name: str,
+    model: MessageModel,
+    parsed: ParsedSysvar,
+) -> List[str]:
     lines = [f"on timer tmr_{message_name}", "{"]
-    lines.append(f"  send_{message_name}();")
-    if _needs_burst_support(model):
+    if _is_mux_multi_group(model):
+        lines.append(f"  send_{message_name}();")
+        if _needs_burst_support(model):
+            lines.extend([
+                f"  if (burst_left_{message_name} > 0)",
+                "  {",
+                f"    burst_left_{message_name}--;",
+                f"    if (burst_left_{message_name} <= 0)",
+                f"      finish_burst_{message_name}();",
+                "    else",
+                f"      arm_{message_name}();",
+                "  }",
+                "  else",
+                f"    arm_{message_name}();",
+            ])
+        else:
+            lines.append(f"  arm_{message_name}();")
+    elif _needs_burst_support(model):
         lines.extend([
             f"  if (burst_left_{message_name} > 0)",
             "  {",
+            f"    send_{message_name}();",
             f"    burst_left_{message_name}--;",
             f"    if (burst_left_{message_name} <= 0)",
             f"      finish_burst_{message_name}();",
@@ -1601,9 +1679,17 @@ def _build_timer_handler(message_name: str, model: MessageModel) -> List[str]:
             f"      arm_{message_name}();",
             "  }",
             "  else",
+            "  {",
+            f"    emit_{message_name}();",
+        ])
+        lines.extend(_build_fill_invoke_lines(message_name, model))
+        lines.extend([
             f"    arm_{message_name}();",
+            "  }",
         ])
     else:
+        lines.append(f"  emit_{message_name}();")
+        lines.extend(_build_fill_invoke_lines(message_name, model))
         lines.append(f"  arm_{message_name}();")
     lines.extend(["}", ""])
     return lines

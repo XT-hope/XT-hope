@@ -1,4 +1,4 @@
-"""周期报文：每条报文独立 msTimer，到期 send 后重新 arm。"""
+"""周期报文：独立 msTimer，到期先 emit(output) 再 fill。"""
 from __future__ import annotations
 
 import tempfile
@@ -18,31 +18,29 @@ class CaplCycleTimingGenerationTest(unittest.TestCase):
         msg_cfg = {"message_name": "Media_0x32B", "has_validation": False}
         return _build_can_file("media", "Media", 1, [(msg_cfg, model)], parsed, {model.name: 0x32B})
 
-    def test_per_message_timer_send_then_arm(self) -> None:
+    def test_timer_emits_before_fill(self) -> None:
         content = self._generate(MUX_VSYSVAR)
-        self.assertIn("msTimer tmr_Media_0x32B;", content)
-        self.assertNotIn("msTimer tmr_sched;", content)
+        self.assertIn("void emit_Media_0x32B()", content)
+        self.assertIn("output(msg_Media_0x32B);", content)
         self.assertNotIn("timeNow()", content)
-        self.assertNotIn("poll_emit_", content)
-        self.assertNotIn("poll_prepare_", content)
-        self.assertNotIn("due_Media_0x32B", content)
-        self.assertNotIn("last_tx_Media_0x32B", content)
-        self.assertNotIn("need_fill_Media_0x32B", content)
+        self.assertNotIn("tmr_sched", content)
 
         timer = content[content.index("on timer tmr_Media_0x32B") :]
         timer = timer[: timer.index("\n\n")]
-        self.assertIn("send_Media_0x32B();", timer)
+        self.assertIn("emit_Media_0x32B();", timer)
+        self.assertIn("fill_Media_0x32B_group(14);", timer)
         self.assertIn("arm_Media_0x32B();", timer)
-        self.assertLess(timer.index("send_Media_0x32B();"), timer.index("arm_Media_0x32B();"))
+        self.assertLess(timer.index("emit_Media_0x32B();"), timer.index("fill_Media_0x32B_group(14);"))
+        self.assertLess(timer.index("fill_Media_0x32B_group(14);"), timer.index("arm_Media_0x32B();"))
+        self.assertNotIn("send_Media_0x32B();", timer)
 
-    def test_arm_uses_set_timer_with_cycle_time(self) -> None:
+    def test_on_start_prepares_before_first_arm(self) -> None:
         content = self._generate(MUX_VSYSVAR)
-        arm = content[content.index("void arm_Media_0x32B") :]
-        arm = arm[: arm.index("\nvoid ")]
-        self.assertIn("setTimer(tmr_Media_0x32B, _ct);", arm)
-        self.assertIn("@media::Media_0x32B_Info.Media_0x32B_MsgCycleTime", arm)
+        start = content[content.index("on start") : content.index("void emit_Media_0x32B")]
+        self.assertIn("fill_Media_0x32B_group(14);", start)
+        self.assertLess(start.index("fill_Media_0x32B_group(14);"), start.index("arm_Media_0x32B();"))
 
-    def test_begin_burst_cancels_timer_and_uses_arm(self) -> None:
+    def test_begin_burst_still_uses_send(self) -> None:
         vsysvar = MUX_VSYSVAR.replace(
             'Media_0x32B_MsgSendType" type="int" startValue="0"',
             'Media_0x32B_MsgSendType" type="int" startValue="1"',
@@ -51,10 +49,7 @@ class CaplCycleTimingGenerationTest(unittest.TestCase):
         content = self._generate(vsysvar)
         begin = content[content.index("void begin_burst_Media_0x32B") :]
         begin = begin[: begin.index("\nvoid ")]
-        self.assertIn("cancelTimer(tmr_Media_0x32B);", begin)
         self.assertIn("send_Media_0x32B();", begin)
-        self.assertIn("arm_Media_0x32B();", begin)
-        self.assertNotIn("timeNow()", begin)
 
 
 if __name__ == "__main__":
