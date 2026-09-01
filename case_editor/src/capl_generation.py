@@ -1582,12 +1582,12 @@ def _build_can_file(
 
     out.append("on timer tmr_sched")
     out.append("{")
-    out.append("  long now;")
+    out.append("  long tNow;")
     out.append("  setTimer(tmr_sched, 1);")
-    out.append("  now = timeNow();")
+    out.append("  tNow = timeNow();")
     for msg_cfg, model in messages:
         name = model.name
-        out.append(f"  poll_emit_{name}(now);")
+        out.append(f"  poll_emit_{name}(tNow);")
     for msg_cfg, model in messages:
         name = model.name
         out.append(f"  poll_prepare_{name}();")
@@ -1613,7 +1613,7 @@ def _build_arm_function(
     model: MessageModel,
 ) -> List[str]:
     cycle_expr = _cycle_time_expr(namespace, message_name, parsed)
-    lines = [f"void arm_{message_name}(long now)", "{", "  long _ct, _now;", "  _now = now;"]
+    lines = [f"void arm_{message_name}(long tNow)", "{", "  long _ct, _dueBase;", "  _dueBase = tNow;"]
     if _needs_burst_support(model):
         fast_expr = _fast_cycle_time_expr(namespace, message_name, parsed)
         lines.extend([
@@ -1627,7 +1627,7 @@ def _build_arm_function(
     lines.extend([
         "  if (_ct <= 0)",
         "    _ct = 10;",
-        f"  due_{message_name} = _now + _ct * {CAPL_TIMENOW_TICKS_PER_MS};",
+        f"  due_{message_name} = _dueBase + _ct * {CAPL_TIMENOW_TICKS_PER_MS};",
         "}",
         "",
     ])
@@ -1641,14 +1641,14 @@ def _build_advance_due_function(
 ) -> List[str]:
     cycle_expr = _cycle_time_expr(namespace, message_name, parsed)
     return [
-        f"void advance_due_{message_name}(long now)",
+        f"void advance_due_{message_name}(long tNow)",
         "{",
         "  long _ct, _period;",
         f"  _ct = {cycle_expr};",
         "  if (_ct <= 0)",
         "    _ct = 10;",
         f"  _period = _ct * {CAPL_TIMENOW_TICKS_PER_MS};",
-        f"  while (due_{message_name} <= now)",
+        f"  while (due_{message_name} <= tNow)",
         f"    due_{message_name} = due_{message_name} + _period;",
         "}",
         "",
@@ -1704,10 +1704,10 @@ def _build_poll_emit_function(
 ) -> List[str]:
     cycle_expr = _cycle_time_expr(namespace, message_name, parsed)
     lines = [
-        f"void poll_emit_{message_name}(long now)",
+        f"void poll_emit_{message_name}(long tNow)",
         "{",
         "  long _gap, _min, _ct, _period;",
-        f"  if (due_{message_name} <= 0 || now < due_{message_name})",
+        f"  if (due_{message_name} <= 0 || tNow < due_{message_name})",
         "    return;",
     ]
     if _needs_burst_support(model):
@@ -1719,14 +1719,14 @@ def _build_poll_emit_function(
             f"    if (burst_left_{message_name} <= 0)",
             f"      finish_burst_{message_name}();",
             "    else",
-            f"      arm_{message_name}(now);",
+            f"      arm_{message_name}(tNow);",
             "    return;",
             "  }",
         ])
     lines.extend([
         f"  if (last_tx_{message_name} > 0)",
         "  {",
-        f"    _gap = now - last_tx_{message_name};",
+        f"    _gap = tNow - last_tx_{message_name};",
         f"    _ct = {cycle_expr};",
         "    if (_ct <= 0)",
         "      _ct = 10;",
@@ -1736,7 +1736,7 @@ def _build_poll_emit_function(
         "      return;",
         "  }",
         f"  emit_{message_name}();",
-        f"  advance_due_{message_name}(now);",
+        f"  advance_due_{message_name}(tNow);",
         f"  need_fill_{message_name} = 1;",
         "}",
         "",

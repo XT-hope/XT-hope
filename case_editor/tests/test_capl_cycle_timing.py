@@ -85,17 +85,17 @@ class CaplCycleTimingGenerationTest(unittest.TestCase):
     def test_scheduler_emits_before_prepare_fill(self) -> None:
         content = self._generate(MUX_VSYSVAR)
         self.assertIn("void emit_Media_0x32B()", content)
-        self.assertIn("void poll_emit_Media_0x32B(long now)", content)
+        self.assertIn("void poll_emit_Media_0x32B(long tNow)", content)
         self.assertIn("void poll_prepare_Media_0x32B()", content)
-        self.assertIn("void advance_due_Media_0x32B(long now)", content)
+        self.assertIn("void advance_due_Media_0x32B(long tNow)", content)
         self.assertIn("long need_fill_Media_0x32B;", content)
         sched = content[content.index("on timer tmr_sched") :]
-        self.assertLess(sched.index("setTimer(tmr_sched, 1);"), sched.index("now = timeNow();"))
-        self.assertLess(sched.index("poll_emit_Media_0x32B(now);"), sched.index("poll_prepare_Media_0x32B();"))
-        emit_poll = content[content.index("void poll_emit_Media_0x32B(long now)") :]
+        self.assertLess(sched.index("setTimer(tmr_sched, 1);"), sched.index("tNow = timeNow();"))
+        self.assertLess(sched.index("poll_emit_Media_0x32B(tNow);"), sched.index("poll_prepare_Media_0x32B();"))
+        emit_poll = content[content.index("void poll_emit_Media_0x32B(long tNow)") :]
         emit_poll = emit_poll[: emit_poll.index("\nvoid ")]
         self.assertIn("emit_Media_0x32B();", emit_poll)
-        self.assertIn("advance_due_Media_0x32B(now);", emit_poll)
+        self.assertIn("advance_due_Media_0x32B(tNow);", emit_poll)
 
     def test_begin_burst_still_uses_send(self) -> None:
         vsysvar = MUX_VSYSVAR.replace(
