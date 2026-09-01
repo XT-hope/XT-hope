@@ -291,6 +291,43 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn("msg_Media_0x32B.CSW_Enable_S = @media::Media_0x32B.CSW_Enable_S_Rv;", content)
         self.assertNotIn("CSW_Enable_S_Pv;", content)
 
+    def test_crc_uses_message_parameter_without_data_copy(self) -> None:
+        from case_editor.src.capl_generation import CHECKSUM_LIB, _build_fill_plain_function
+
+        self.assertIn("word PROJ_CRC16_CCITT(message msg, long len", CHECKSUM_LIB)
+        self.assertIn("msg.byte(i)", CHECKSUM_LIB)
+        self.assertNotIn("byte data[]", CHECKSUM_LIB)
+
+        with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
+            fh.write(MUX_VSYSVAR.replace(
+                '<structMember name="CSW_Enable_S_SigSendType"',
+                '''<structMember name="CRC_S_Pv" type="int" startValue="0" bitcount="32" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>
+        <structMember name="CRC_S_Rv" type="int" startValue="0" bitcount="32" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>
+        <structMember name="CRC_S_Factor" type="float" startValue="1" bitcount="64" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>
+        <structMember name="CRC_S_Offset" type="float" startValue="0" bitcount="64" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>
+        <structMember name="CSW_Enable_S_SigSendType"''',
+                1,
+            ))
+            path = fh.name
+
+        parsed = parse_vsysvar(path)
+        model = parsed.messages["Media_0x32B"]
+        lines = _build_fill_plain_function(
+            "media",
+            model.name,
+            model,
+            parsed,
+            True,
+            "",
+            "CRC_S",
+            "crc16",
+            {"poly": "0x1021", "init": "0xFFFF", "xorOut": "0x0000"},
+        )
+        content = "\n".join(lines)
+        self.assertIn("PROJ_CRC16_CCITT(msg_Media_0x32B, _n, 0xFFFF, 0x1021, 0x0000);", content)
+        self.assertNotIn("_data[", content)
+        self.assertNotIn(".byte(_i)", content)
+
     def test_fill_group_merges_same_mux_id(self) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
             fh.write(MUX_VSYSVAR)
