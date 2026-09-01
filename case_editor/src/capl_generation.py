@@ -12,8 +12,7 @@ CAPL 生成器
     Cycle / Event / IfActive / CE / CA（数值与 DBC GenMsgSendType 一致：0~4）。
     发送类型在生成期从 .vsysvar 的 {Msg}_MsgSendType 起始值解析，按类型生成对应 CAPL，
     运行时不判断报文发送类型。无 {Msg}_MsgSendType 时按纯周期调度（_MsgCycleTime，缺省 10ms）。
-- 周期发送采用共享 1ms 调度器（tmr_sched）：到期先 output（emit）再异步 fill（prepare），
-  避免 fill 耗时抖动导致 Trace 间隔出现约 2 倍周期的尖峰（如 10ms 周期下偶发 19.5ms）。
+- 周期发送：每条报文独立 msTimer，到期 send（fill + output）后重新 arm。
     IfActive / CA：在 {Sig}_has_inactive_value==1 时，Pv/Rv 跨越 inactive（进入或离开）都触发 burst。
 - 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；报文对象 msg.信号 赋 raw 值（Rv）。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
@@ -43,31 +42,6 @@ MSG_SEND_EVENT = 1
 MSG_SEND_IF_ACTIVE = 2
 MSG_SEND_CE = 3
 MSG_SEND_CA = 4
-
-# CAPL timeNow() 刻度：100 tick/ms（10us/tick）。
-CAPL_TIMENOW_TICKS_PER_MS = 100
-# 周期报文 catch-up 判定的最小间隔比例（period 的一半，即 5ms@10ms 周期）。
-CAPL_MIN_GAP_TICKS_PER_MS = 50
-
-
-def capl_ms_to_timenow_ticks(ms: int) -> int:
-    return int(ms) * CAPL_TIMENOW_TICKS_PER_MS
-
-
-def is_cyclic_catchup_gap(now: int, last: int, period: int) -> bool:
-    """间隔过短（< period/2）视为 catch-up 重复发送，应丢弃本帧。"""
-    gap = now - last
-    min_gap = period // 2
-    return last > 0 and gap >= 0 and gap < min_gap
-
-
-def advance_due_on_grid(due: int, now: int, period: int) -> int:
-    """将下次到期时刻推进到不早于 now 的周期网格上。"""
-    nxt = due
-    while nxt <= now:
-        nxt += period
-    return nxt
-
 
 # 单个信号在 .vsysvar 报文结构里的成员后缀（带前导下划线）。
 # 注意：匹配时必须按“长后缀优先”，否则 _special_value 会错误命中 _has_special_value。
@@ -1102,11 +1076,11 @@ def _build_begin_burst_function(namespace: str, message_name: str, parsed: Parse
         "  if (burst_left_{0} <= 0)".format(message_name),
         f"    burst_left_{message_name} = 1;",
         f"  burst_fast_{message_name} = use_fast;",
-        f"  due_{message_name} = 0;",
+        f"  cancelTimer(tmr_{message_name});",
         f"  send_{message_name}();",
         f"  burst_left_{message_name}--;",
         f"  if (burst_left_{message_name} > 0)",
-        f"    arm_{message_name}(timeNow());",
+        f"    arm_{message_name}();",
         "  else",
         f"    finish_burst_{message_name}();",
         "}",
@@ -1143,7 +1117,7 @@ def _build_finish_burst_function(
     if send_type in (MSG_SEND_EVENT, MSG_SEND_IF_ACTIVE):
         lines.append("  return;")
     else:
-        lines.append(f"  arm_{message_name}(timeNow());")
+        lines.append(f"  arm_{message_name}();")
     lines.append("}")
     lines.append("")
     return lines
@@ -1441,14 +1415,11 @@ def _build_merged_sysvar_handlers(
     return lines
 
 
-def _build_scheduler_variables(message_name: str, model: MessageModel) -> List[str]:
-    lines = [
-        f"  long due_{message_name};",
-        f"  long last_tx_{message_name};",
-        f"  long need_fill_{message_name};",
+def _build_timer_variables(message_name: str) -> List[str]:
+    return [
+        f"  msTimer tmr_{message_name};",
+        *_build_core_burst_timer_variables(message_name),
     ]
-    lines.extend(_build_core_burst_timer_variables(message_name))
-    return lines
 
 
 def _build_initial_prepare_call(namespace: str, message_name: str, model: MessageModel) -> List[str]:
@@ -1483,7 +1454,6 @@ def _build_can_file(
 
     out.append("variables")
     out.append("{")
-    out.append("  msTimer tmr_sched;")
     for msg_cfg, model in messages:
         name = model.name
         frame_id = frame_ids.get(name)
@@ -1493,7 +1463,7 @@ def _build_can_file(
                 f"将使用符号名声明 message（若编译失败请检查 DBC 或报文名）"
             )
         out.append(_message_decl(name, frame_id))
-        out.extend(_build_scheduler_variables(name, model))
+        out.extend(_build_timer_variables(name))
         if _counter_enabled(msg_cfg, model):
             out.append(f"  long cnt_{name};")
         exclude = set()
@@ -1524,9 +1494,6 @@ def _build_can_file(
                 sig = msg_cfg.get(key, "")
                 if sig:
                     exclude.add(sig)
-        out.append(f"  due_{name} = 0;")
-        out.append(f"  last_tx_{name} = 0;")
-        out.append(f"  need_fill_{name} = 0;")
         out.append(f"  burst_left_{name} = 0;")
         out.append(f"  burst_fast_{name} = 0;")
         if _needs_burst_support(model):
@@ -1540,8 +1507,7 @@ def _build_can_file(
             out.append(f"  {_quiet_var(name)} = 0;")
         out.extend(_build_initial_prepare_call(namespace, name, model))
         if _needs_periodic_scheduler(model):
-            out.append(f"  arm_{name}(timeNow());")
-    out.append("  setTimer(tmr_sched, 1);")
+            out.append(f"  arm_{name}();")
     out.append("}")
     out.append("")
 
@@ -1559,12 +1525,8 @@ def _build_can_file(
             out.extend(_build_begin_burst_function(namespace, name, parsed, model))
             out.extend(_build_finish_burst_function(namespace, name, model, parsed, exclude))
         out.extend(_build_arm_function(namespace, name, parsed, model))
-        out.extend(_build_advance_due_function(namespace, name, parsed))
-        out.extend(_build_emit_function(namespace, dbc_name, sender_node, name, model, parsed))
-        out.extend(_build_poll_emit_function(namespace, name, parsed, model))
-        out.extend(_build_poll_prepare_function(name, model))
-        if _needs_burst_support(model):
-            out.extend(_build_send_function(namespace, dbc_name, sender_node, name, model, parsed))
+        out.extend(_build_timer_handler(name, model))
+        out.extend(_build_send_function(namespace, dbc_name, sender_node, name, model, parsed))
         out.extend(
             _build_fill_function(
                 namespace,
@@ -1579,20 +1541,6 @@ def _build_can_file(
             )
         )
         out.extend(_build_merged_sysvar_handlers(namespace, name, model, parsed, exclude))
-
-    out.append("on timer tmr_sched")
-    out.append("{")
-    out.append("  long tNow;")
-    out.append("  setTimer(tmr_sched, 1);")
-    out.append("  tNow = timeNow();")
-    for msg_cfg, model in messages:
-        name = model.name
-        out.append(f"  poll_emit_{name}(tNow);")
-    for msg_cfg, model in messages:
-        name = model.name
-        out.append(f"  poll_prepare_{name}();")
-    out.append("}")
-    out.append("")
 
     return "\n".join(out) + "\n"
 
@@ -1613,7 +1561,13 @@ def _build_arm_function(
     model: MessageModel,
 ) -> List[str]:
     cycle_expr = _cycle_time_expr(namespace, message_name, parsed)
-    lines = [f"void arm_{message_name}(long tNow)", "{", "  long _ct, _dueBase;", "  _dueBase = tNow;"]
+    send_type = _resolve_msg_send_type(model)
+    lines = [f"void arm_{message_name}()", "{", "  long _ct;"]
+    if send_type in (MSG_SEND_EVENT, MSG_SEND_IF_ACTIVE):
+        lines.extend([
+            f"  if (burst_left_{message_name} <= 0)",
+            "    return;",
+        ])
     if _needs_burst_support(model):
         fast_expr = _fast_cycle_time_expr(namespace, message_name, parsed)
         lines.extend([
@@ -1627,32 +1581,33 @@ def _build_arm_function(
     lines.extend([
         "  if (_ct <= 0)",
         "    _ct = 10;",
-        f"  due_{message_name} = _dueBase + _ct * {CAPL_TIMENOW_TICKS_PER_MS};",
+        f"  setTimer(tmr_{message_name}, _ct);",
         "}",
         "",
     ])
     return lines
 
 
-def _build_advance_due_function(
-    namespace: str,
-    message_name: str,
-    parsed: ParsedSysvar,
-) -> List[str]:
-    cycle_expr = _cycle_time_expr(namespace, message_name, parsed)
-    return [
-        f"void advance_due_{message_name}(long tNow)",
-        "{",
-        "  long _ct, _period;",
-        f"  _ct = {cycle_expr};",
-        "  if (_ct <= 0)",
-        "    _ct = 10;",
-        f"  _period = _ct * {CAPL_TIMENOW_TICKS_PER_MS};",
-        f"  while (due_{message_name} <= tNow)",
-        f"    due_{message_name} = due_{message_name} + _period;",
-        "}",
-        "",
-    ]
+def _build_timer_handler(message_name: str, model: MessageModel) -> List[str]:
+    lines = [f"on timer tmr_{message_name}", "{"]
+    lines.append(f"  send_{message_name}();")
+    if _needs_burst_support(model):
+        lines.extend([
+            f"  if (burst_left_{message_name} > 0)",
+            "  {",
+            f"    burst_left_{message_name}--;",
+            f"    if (burst_left_{message_name} <= 0)",
+            f"      finish_burst_{message_name}();",
+            "    else",
+            f"      arm_{message_name}();",
+            "  }",
+            "  else",
+            f"    arm_{message_name}();",
+        ])
+    else:
+        lines.append(f"  arm_{message_name}();")
+    lines.extend(["}", ""])
+    return lines
 
 
 def _append_send_gate_lines(
@@ -1675,90 +1630,6 @@ def _append_send_gate_lines(
         lines.append(f"  if ({_sysvar(namespace, info, message_name + '_MsgOff')} == 1) return;")
 
 
-def _build_emit_function(
-    namespace: str,
-    dbc_name: str,
-    sender_node: str,
-    message_name: str,
-    model: MessageModel,
-    parsed: ParsedSysvar,
-) -> List[str]:
-    msg = _msg_var(message_name)
-    lines = [f"void emit_{message_name}()", "{"]
-    _append_send_gate_lines(lines, namespace, dbc_name, sender_node, message_name, parsed)
-    if model.mux is not None:
-        lines.append(f"  output_all_{message_name}_groups();")
-    else:
-        lines.append(f"  output({msg});")
-    lines.append(f"  last_tx_{message_name} = timeNow();")
-    lines.append("}")
-    lines.append("")
-    return lines
-
-
-def _build_poll_emit_function(
-    namespace: str,
-    message_name: str,
-    parsed: ParsedSysvar,
-    model: MessageModel,
-) -> List[str]:
-    cycle_expr = _cycle_time_expr(namespace, message_name, parsed)
-    lines = [
-        f"void poll_emit_{message_name}(long tNow)",
-        "{",
-        "  long _gap, _min, _ct, _period;",
-        f"  if (due_{message_name} <= 0 || tNow < due_{message_name})",
-        "    return;",
-    ]
-    if _needs_burst_support(model):
-        lines.extend([
-            f"  if (burst_left_{message_name} > 0)",
-            "  {",
-            f"    send_{message_name}();",
-            f"    burst_left_{message_name}--;",
-            f"    if (burst_left_{message_name} <= 0)",
-            f"      finish_burst_{message_name}();",
-            "    else",
-            f"      arm_{message_name}(tNow);",
-            "    return;",
-            "  }",
-        ])
-    lines.extend([
-        f"  if (last_tx_{message_name} > 0)",
-        "  {",
-        f"    _gap = tNow - last_tx_{message_name};",
-        f"    _ct = {cycle_expr};",
-        "    if (_ct <= 0)",
-        "      _ct = 10;",
-        f"    _period = _ct * {CAPL_TIMENOW_TICKS_PER_MS};",
-        "    _min = _period / 2;",
-        "    if (_gap >= 0 && _gap < _min)",
-        "      return;",
-        "  }",
-        f"  emit_{message_name}();",
-        f"  advance_due_{message_name}(tNow);",
-        f"  need_fill_{message_name} = 1;",
-        "}",
-        "",
-    ])
-    return lines
-
-
-def _build_poll_prepare_function(message_name: str, model: MessageModel) -> List[str]:
-    lines = [f"void poll_prepare_{message_name}()", "{"]
-    lines.append(f"  if (!need_fill_{message_name})")
-    lines.append("    return;")
-    if model.mux is not None:
-        if len(model.mux.groups) == 1:
-            lines.append(f"  fill_{message_name}_group({model.mux.groups[0]});")
-    else:
-        lines.append(f"  fill_{message_name}();")
-    lines.append(f"  need_fill_{message_name} = 0;")
-    lines.append("}")
-    lines.append("")
-    return lines
-
-
 def _build_send_function(
     namespace: str,
     dbc_name: str,
@@ -1773,19 +1644,20 @@ def _build_send_function(
     _append_send_gate_lines(lines, namespace, dbc_name, sender_node, message_name, parsed)
 
     if model.mux is not None:
-        burst_mux = _burst_mux_var(message_name)
-        lines.append(f"  if (burst_left_{message_name} > 0)")
-        lines.append("  {")
-        if send_type in (MSG_SEND_CE, MSG_SEND_CA):
-            lines.append(f"    output_all_{message_name}_groups();")
-        else:
-            lines.append(f"    if ({burst_mux} >= 0)")
-            lines.append("    {")
-            lines.append(f"      fill_{message_name}_group({burst_mux});")
-            lines.append(f"      output({msg});")
-            lines.append("    }")
-        lines.append("    return;")
-        lines.append("  }")
+        if _needs_burst_support(model):
+            burst_mux = _burst_mux_var(message_name)
+            lines.append(f"  if (burst_left_{message_name} > 0)")
+            lines.append("  {")
+            if send_type in (MSG_SEND_CE, MSG_SEND_CA):
+                lines.append(f"    output_all_{message_name}_groups();")
+            else:
+                lines.append(f"    if ({burst_mux} >= 0)")
+                lines.append("    {")
+                lines.append(f"      fill_{message_name}_group({burst_mux});")
+                lines.append(f"      output({msg});")
+                lines.append("    }")
+            lines.append("    return;")
+            lines.append("  }")
         lines.append(f"  output_all_{message_name}_groups();")
     else:
         lines.append(f"  fill_{message_name}();")
