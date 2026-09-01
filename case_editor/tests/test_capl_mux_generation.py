@@ -83,7 +83,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertNotIn("g_mux_groups_", content)
         self.assertNotIn("const long", content)
         self.assertIn("void output_all_Media_0x32B_groups()", content)
-        self.assertIn("long mux_ids[] = {14};", content)
+        self.assertIn("long mux_ids[1] = {14};", content)
         self.assertIn("fill_Media_0x32B_group(mux_ids[i]);", content)
         self.assertIn("output_all_Media_0x32B_groups();", content)
         self.assertIn("output(msg_Media_0x32B);", content)
@@ -294,9 +294,8 @@ class CaplMuxGenerationTest(unittest.TestCase):
     def test_crc_uses_message_parameter_without_data_copy(self) -> None:
         from case_editor.src.capl_generation import CHECKSUM_LIB, _build_fill_plain_function
 
-        self.assertIn("word PROJ_CRC16_CCITT(message msg, long len", CHECKSUM_LIB)
-        self.assertIn("msg.byte(i)", CHECKSUM_LIB)
-        self.assertNotIn("byte data[]", CHECKSUM_LIB)
+        self.assertIn("word PROJ_CRC16_CCITT(byte data[], long len", CHECKSUM_LIB)
+        self.assertNotIn("message msg", CHECKSUM_LIB)
 
         with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
             fh.write(MUX_VSYSVAR.replace(
@@ -324,9 +323,9 @@ class CaplMuxGenerationTest(unittest.TestCase):
             {"poly": "0x1021", "init": "0xFFFF", "xorOut": "0x0000"},
         )
         content = "\n".join(lines)
-        self.assertIn("PROJ_CRC16_CCITT(msg_Media_0x32B, _n, 0xFFFF, 0x1021, 0x0000);", content)
-        self.assertNotIn("_data[", content)
-        self.assertNotIn(".byte(_i)", content)
+        self.assertIn("PROJ_CRC16_CCITT(_data, _n, 0xFFFF, 0x1021, 0x0000);", content)
+        self.assertIn("_data[", content)
+        self.assertIn(".byte(_i)", content)
 
     def test_fill_group_merges_same_mux_id(self) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
@@ -373,7 +372,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
         )
         content = "\n".join(_build_mux_output_all_groups_function("Msg_A", model))
         self.assertIn("void output_all_Msg_A_groups()", content)
-        self.assertIn("long mux_ids[] = {1, 14, 3, 12, 13};", content)
+        self.assertIn("long mux_ids[5] = {1, 14, 3, 12, 13};", content)
         self.assertNotIn("const long", content)
         self.assertIn("for (i = 0; i < 5; i++)", content)
         self.assertIn("fill_Msg_A_group(mux_ids[i]);", content)

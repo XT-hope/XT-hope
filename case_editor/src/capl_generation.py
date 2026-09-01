@@ -603,7 +603,7 @@ def _to_capl_int_literal(value: str) -> str:
 CHECKSUM_LIB = """/*@!Encoding:65001*/
 /*
  * 报文校验库（自动生成，请勿手改）。
- * 1) PROJ_CRC16_CCITT：查表法 CRC16-CCITT，直接读取 message 字节（无 byte[] 拷贝）。
+ * 1) PROJ_CRC16_CCITT：查表法 CRC16-CCITT，poly/init/xorOut 可由调用参数控制。
  * 2) PROJ_Checksum    ：逐字节求和后取反（sum ^ 0xFF）。
  */
 
@@ -635,8 +635,8 @@ void BuildCrc16Table(dword poly)
   gCrcTableReady = 1;
 }
 
-// 查表法 CRC16-CCITT（非反射）。直接读取 message 字节，无需 byte[] 拷贝。
-word PROJ_CRC16_CCITT(message msg, long len, dword init, dword poly, dword xorOut)
+// 查表法 CRC16-CCITT（非反射）。init/poly/xorOut 由调用方传入，便于按报文配置变更。
+word PROJ_CRC16_CCITT(byte data[], long len, dword init, dword poly, dword xorOut)
 {
   word crc;
   long i;
@@ -649,21 +649,21 @@ word PROJ_CRC16_CCITT(message msg, long len, dword init, dword poly, dword xorOu
   crc = (word)(init & 0xFFFF);
   for (i = 0; i < len; i++)
   {
-    idx = (byte)(((crc >> 8) ^ msg.byte(i)) & 0xFF);
+    idx = (byte)(((crc >> 8) ^ data[i]) & 0xFF);
     crc = (word)(((crc << 8) ^ gCrc1021Table[idx]) & 0xFFFF);
   }
   return (word)((crc ^ xorOut) & 0xFFFF);
 }
 
 // sum 校验：逐字节求和后取反。
-byte PROJ_Checksum(message msg, long len)
+byte PROJ_Checksum(byte data[], long len)
 {
   byte sum;
   long i;
 
   sum = 0;
   for (i = 0; i < len; i++)
-    sum = (byte)((sum + msg.byte(i)) & 0xFF);
+    sum = (byte)((sum + data[i]) & 0xFF);
   return (byte)(sum ^ 0xFF);
 }
 """
@@ -822,7 +822,8 @@ def _build_fill_body_lines(
 
     lines: List[str] = []
     if has_checksum:
-        lines.append("  long _n;")
+        lines.append("  byte _data[64];")
+        lines.append("  long _i, _n;")
         lines.append("  dword _crc;")
         lines.append("")
 
@@ -869,15 +870,17 @@ def _build_fill_body_lines(
         lines.append("")
         lines.append(f"  {msg}.{check_signal} = 0;")
         lines.append(f"  _n = {msg}.dlc;")
+        lines.append("  for (_i = 0; _i < _n; _i++)")
+        lines.append(f"    _data[_i] = {msg}.byte(_i);")
         if "crc" in method:
             poly = _to_capl_int_literal(str(params.get("poly", "0x1021")))
             init = _to_capl_int_literal(str(params.get("init", "0xFFFF")))
             xor_out = _to_capl_int_literal(str(params.get("xorOut", "0x0000")))
             lines.append(
-                f"  _crc = PROJ_CRC16_CCITT({msg}, _n, {init}, {poly}, {xor_out});"
+                f"  _crc = PROJ_CRC16_CCITT(_data, _n, {init}, {poly}, {xor_out});"
             )
         else:
-            lines.append(f"  _crc = PROJ_Checksum({msg}, _n);")
+            lines.append("  _crc = PROJ_Checksum(_data, _n);")
         wrong_crc = _info_sysvar(namespace, message_name, "_WrongCRCFlag", parsed, "0")
         if model.info and model.info.has_wrong_crc_flag:
             lines.append(f"  if ({wrong_crc} == 1)")
@@ -1141,7 +1144,7 @@ def _build_mux_output_all_groups_function(message_name: str, model: MessageModel
         f"void output_all_{message_name}_groups()",
         "{",
         "  int i;",
-        f"  long mux_ids[] = {{{ids_literal}}};",
+        f"  long mux_ids[{len(groups)}] = {{{ids_literal}}};",
         f"  for (i = 0; i < {len(groups)}; i++)",
         "  {",
         f"    fill_{message_name}_group(mux_ids[i]);",
