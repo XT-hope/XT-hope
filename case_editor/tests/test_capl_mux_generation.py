@@ -482,6 +482,70 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertNotIn("for (i = 0;", content)
         self.assertNotIn("mux_ids", content)
 
+    def test_output_all_groups_loops_multiple_mux_ids(self) -> None:
+        from case_editor.src.capl_generation import (
+            MessageModel,
+            MuxMetadata,
+            _build_mux_output_all_groups_function,
+        )
+
+        mux_signal = SignalModel(name="Mux_S", is_multiplexer=True)
+        model = MessageModel(
+            name="Msg_A",
+            mux=MuxMetadata(
+                mux_signal_name="Mux_S",
+                mux_signal=mux_signal,
+                groups=[1, 2, 3],
+                initial_value="0",
+            ),
+        )
+        content = "\n".join(_build_mux_output_all_groups_function("Msg_A", model))
+        self.assertIn("long mux_ids[3] = {1, 2, 3};", content)
+        self.assertIn("for (i = 0; i < 3; i++)", content)
+        self.assertIn("fill_Msg_A_group(mux_ids[i]);", content)
+        self.assertIn("output(msg_Msg_A);", content)
+
+    def test_multi_mux_three_groups_round_robin(self) -> None:
+        vsysvar_path = "/opt/cursor/artifacts/capl_demo/demo_0x100_groups_1_2_3.vsysvar"
+        with open(vsysvar_path, encoding="utf-8") as fh:
+            vsysvar = fh.read()
+        with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
+            fh.write(vsysvar)
+            path = fh.name
+
+        parsed = parse_vsysvar(path)
+        model = parsed.messages["Demo_0x100"]
+        self.assertEqual(model.mux.groups, [1, 2, 3])
+        msg_cfg = {"message_name": "Demo_0x100", "has_validation": False}
+        content = _build_can_file("ecu", "ECU", 1, [(msg_cfg, model)], parsed, {model.name: 0x100})
+
+        self.assertIn("long mux_idx_Demo_0x100;", content)
+        self.assertIn("long mux_ids_Demo_0x100[3] = {1, 2, 3};", content)
+        self.assertIn("void sync_Demo_0x100_payload()", content)
+        self.assertIn("void apply_Demo_0x100_Sig_1A()", content)
+        self.assertIn("void apply_Demo_0x100_Sig_3B()", content)
+
+        start = content[content.index("on start") : content.index("void output_all_Demo_0x100_groups")]
+        self.assertIn("mux_idx_Demo_0x100 = 0;", start)
+        self.assertIn("fill_Demo_0x100_group(mux_ids_Demo_0x100[mux_idx_Demo_0x100]);", start)
+        self.assertIn("sync_Demo_0x100_payload();", start)
+        self.assertLess(
+            start.index("fill_Demo_0x100_group(mux_ids_Demo_0x100[mux_idx_Demo_0x100]);"),
+            start.index("sync_Demo_0x100_payload();"),
+        )
+
+        timer = content[content.index("on timer tmr_Demo_0x100") : content.index("void send_Demo_0x100")]
+        self.assertIn("fill_Demo_0x100_group(mux_ids_Demo_0x100[mux_idx_Demo_0x100]);", timer)
+        self.assertIn("output(msg_Demo_0x100);", timer)
+        self.assertIn("if (mux_idx_Demo_0x100 >= 3)", timer)
+        self.assertNotIn("emit_Demo_0x100();", timer)
+
+        output_all = content[
+            content.index("void output_all_Demo_0x100_groups") : content.index("void apply_Demo_0x100_Sig_1A")
+        ]
+        self.assertIn("long mux_ids[3] = {1, 2, 3};", output_all)
+        self.assertEqual(output_all.count("fill_Demo_0x100_group(mux_ids[i]);"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

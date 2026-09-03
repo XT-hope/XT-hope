@@ -22,6 +22,8 @@ CAPL 生成器
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
   时用 g_sv_quiet_* 计数器屏蔽 on sysvar，避免联动/恢复再次触发 burst。
 - Simple Mux（单 group）：周期与普通报文相同；fill_group 写死唯一 multiplexer_id。
+  多 group Mux：声明 mux_idx / mux_ids[]；周期 timer 轮询 fill → output → idx++ → arm(T)；
+  on start / MsgOn prepare 为 fill → sync；output_all 循环各 group 连续 fill → output。
   CE OnChange/OnWrite 额外发一帧（触发信号所在 group），不打断周期 timer；额外帧经 fill
   递增 counter 并 refresh_crc，发完后再次 fill 为下周期 prepare，避免 counter 重复。
   CA / Event / IfActive burst 均只发触发 group（或唯一 group）。
@@ -1273,9 +1275,47 @@ def _has_burst_triggers(model: MessageModel) -> bool:
     return _needs_burst_support(model)
 
 
+def _mux_idx_var(message_name: str) -> str:
+    return f"mux_idx_{message_name}"
+
+
+def _mux_ids_var(message_name: str) -> str:
+    return f"mux_ids_{message_name}"
+
+
+def _is_mux_multi_group(model: MessageModel) -> bool:
+    return model.mux is not None and len(model.mux.groups) > 1
+
+
+def _mux_group_count(model: MessageModel) -> int:
+    assert model.mux is not None
+    return len(model.mux.groups)
+
+
+def _build_mux_scheduler_variables(message_name: str, model: MessageModel) -> List[str]:
+    if not _is_mux_multi_group(model):
+        return []
+    groups = model.mux.groups
+    ids_literal = ", ".join(str(g) for g in groups)
+    return [
+        f"  long {_mux_idx_var(message_name)};",
+        f"  long {_mux_ids_var(message_name)}[{len(groups)}] = {{{ids_literal}}};",
+    ]
+
+
+def _build_on_start_mux_init(message_name: str, model: MessageModel) -> List[str]:
+    if _is_mux_multi_group(model):
+        return [f"  {_mux_idx_var(message_name)} = 0;"]
+    return []
+
+
 def _build_fill_invoke_lines(message_name: str, model: MessageModel, indent: str = "  ") -> List[str]:
     if model.mux is None:
         return [f"{indent}fill_{message_name}();"]
+    if _is_mux_multi_group(model):
+        mux_ids = _mux_ids_var(message_name)
+        mux_idx = _mux_idx_var(message_name)
+        return [f"{indent}fill_{message_name}_group({mux_ids}[{mux_idx}]);"]
     if len(model.mux.groups) == 1:
         return [f"{indent}fill_{message_name}_group({model.mux.groups[0]});"]
     return []
@@ -1328,10 +1368,26 @@ def _build_mux_output_all_groups_function(
     counter_signal: str = "",
     check_signal: str = "",
 ) -> List[str]:
-    """生成 Simple Mux 报文 fill + sync + output 辅助函数（仅唯一 group）。"""
+    """生成 Mux 报文 fill (+ sync) + output 辅助函数。"""
     if model.mux is None:
         return []
     msg = _msg_var(message_name)
+    if _is_mux_multi_group(model):
+        groups = model.mux.groups
+        ids_literal = ", ".join(str(g) for g in groups)
+        return [
+            f"void output_all_{message_name}_groups()",
+            "{",
+            "  int i;",
+            f"  long mux_ids[{len(groups)}] = {{{ids_literal}}};",
+            f"  for (i = 0; i < {len(groups)}; i++)",
+            "  {",
+            f"    fill_{message_name}_group(mux_ids[i]);",
+            f"    output({msg});",
+            "  }",
+            "}",
+            "",
+        ]
     group_id = model.mux.groups[0]
     lines = [
         f"void output_all_{message_name}_groups()",
@@ -1723,6 +1779,8 @@ def _build_can_file(
             )
         out.append(_message_decl(name, frame_id))
         out.extend(_build_timer_variables(name))
+        if _is_mux_multi_group(model):
+            out.extend(_build_mux_scheduler_variables(name, model))
         if _counter_enabled(msg_cfg, model):
             out.append(f"  long cnt_{name};")
         exclude = set()
@@ -1764,6 +1822,7 @@ def _build_can_file(
             out.extend(_build_init_shadows(namespace, name, model, exclude))
         if _message_needs_quiet(model, exclude):
             out.append(f"  {_quiet_var(name)} = 0;")
+        out.extend(_build_on_start_mux_init(name, model))
         counter_sig = msg_cfg.get("counter_signal", "") if msg_cfg.get("has_validation", False) else ""
         check_sig = msg_cfg.get("check_signal", "") if msg_cfg.get("has_validation", False) else ""
         out.extend(_build_startup_prepare_lines(name, model, counter_sig, check_sig))
@@ -2006,6 +2065,21 @@ def _build_send_additional_frame_function(
     return lines
 
 
+def _build_mux_round_robin_timer_lines(message_name: str, model: MessageModel) -> List[str]:
+    msg = _msg_var(message_name)
+    group_count = _mux_group_count(model)
+    mux_ids = _mux_ids_var(message_name)
+    mux_idx = _mux_idx_var(message_name)
+    return [
+        f"  fill_{message_name}_group({mux_ids}[{mux_idx}]);",
+        f"  output({msg});",
+        f"  {mux_idx} = {mux_idx} + 1;",
+        f"  if ({mux_idx} >= {group_count})",
+        f"    {mux_idx} = 0;",
+        f"  arm_{message_name}();",
+    ]
+
+
 def _build_periodic_timer_cycle_lines(
     message_name: str,
     model: MessageModel,
@@ -2041,7 +2115,26 @@ def _build_timer_handler(
 ) -> List[str]:
     has_checksum = _message_has_checksum(has_validation, check_signal, model)
     lines = [f"on timer tmr_{message_name}", "{"]
-    if _uses_begin_burst_send(model):
+    if _is_mux_multi_group(model):
+        if _uses_begin_burst_send(model):
+            lines.extend([
+                f"  if (burst_left_{message_name} > 0)",
+                "  {",
+                f"    send_{message_name}();",
+                f"    burst_left_{message_name}--;",
+                f"    if (burst_left_{message_name} <= 0)",
+                f"      finish_burst_{message_name}();",
+                "    else",
+                f"      arm_{message_name}();",
+                "  }",
+                "  else",
+                "  {",
+            ])
+            lines.extend(_build_mux_round_robin_timer_lines(message_name, model))
+            lines.append("  }")
+        else:
+            lines.extend(_build_mux_round_robin_timer_lines(message_name, model))
+    elif _uses_begin_burst_send(model):
         lines.extend([
             f"  if (burst_left_{message_name} > 0)",
             "  {",
@@ -2126,7 +2219,8 @@ def _build_send_function(
                 lines.append("    }")
             lines.append("    return;")
             lines.append("  }")
-        lines.append(f"  output_all_{message_name}_groups();")
+        if not _is_mux_multi_group(model):
+            lines.append(f"  output_all_{message_name}_groups();")
     else:
         lines.extend(_build_fill_invoke_lines(message_name, model, indent="  "))
         lines.extend(
