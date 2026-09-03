@@ -1456,7 +1456,8 @@ def _build_timer_variables(message_name: str) -> List[str]:
 
 def _build_initial_prepare_call(namespace: str, message_name: str, model: MessageModel) -> List[str]:
     if _is_mux_multi_group(model):
-        return []
+        mux_ids = _mux_ids_var(message_name)
+        return [f"  fill_{message_name}_group({mux_ids}[0]);"]
     return _build_fill_invoke_lines(message_name, model)
 
 
