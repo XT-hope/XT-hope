@@ -21,7 +21,8 @@ CAPL 生成器
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
   时用 g_sv_quiet_* 计数器屏蔽 on sysvar，避免联动/恢复再次触发 burst。
 - Simple Mux（单 group）：周期与普通报文相同；fill_group 写死唯一 multiplexer_id。
-  CE OnChange/OnWrite 额外发一帧（触发信号所在 group），不打断周期 timer；
+  CE OnChange/OnWrite 额外发一帧（触发信号所在 group），不打断周期 timer；额外帧经 fill
+  递增 counter 并 refresh_crc，发完后再次 fill 为下周期 prepare，避免 counter 重复。
   CA / Event / IfActive burst 均只发触发 group（或唯一 group）。
   Mux 开关信号不参与 burst 触发与影子恢复；其报文值由 fill_group(mux_id) 驱动，与用户 sysvar 赋值互不干扰。
   多路复用元数据全部来自 .vsysvar（_is_multiplexed / _is_multiplexer / _multiplexer_id），生成期写死。
@@ -1765,7 +1766,7 @@ def _build_can_file(
         if _resolve_msg_send_type(model) == MSG_SEND_CE:
             out.extend(
                 _build_send_additional_frame_function(
-                    namespace, dbc_name, sender_node, name, model, parsed
+                    namespace, dbc_name, sender_node, name, model, parsed, has_val, check_sig
                 )
             )
         out.extend(_build_arm_function(namespace, name, parsed, model))
@@ -1901,9 +1902,12 @@ def _build_send_additional_frame_function(
     message_name: str,
     model: MessageModel,
     parsed: ParsedSysvar,
+    has_validation: bool = False,
+    check_signal: str = "",
 ) -> List[str]:
-    """CE：OnChange/OnWrite 在周期之外额外发一帧，不 cancelTimer、不改 burst_left。"""
+    """CE：OnChange/OnWrite 额外发一帧，不 cancelTimer、不改 burst_left；counter 同样叠加。"""
     msg = _msg_var(message_name)
+    has_checksum = _message_has_checksum(has_validation, check_signal, model)
     if model.mux is not None:
         lines = [f"void send_additional_{message_name}(long mux_id)", "{"]
     else:
@@ -1912,12 +1916,19 @@ def _build_send_additional_frame_function(
     if model.mux is not None:
         lines.append("  if (mux_id >= 0)")
         lines.append("  {")
-        lines.append(f"    fill_{message_name}_group(mux_id);")
-        lines.append(f"    output({msg});")
+        inner_indent = "    "
+        if has_checksum:
+            lines.append(f"{inner_indent}{_refresh_crc_function_name(message_name)}();")
+        lines.extend(_build_fill_invoke_lines(message_name, model, indent=inner_indent))
+        lines.append(f"{inner_indent}output({msg});")
+        lines.extend(_build_fill_invoke_lines(message_name, model, indent=inner_indent))
         lines.append("  }")
     else:
+        if has_checksum:
+            lines.append(f"  {_refresh_crc_function_name(message_name)}();")
         lines.extend(_build_fill_invoke_lines(message_name, model, indent="  "))
         lines.append(f"  output({msg});")
+        lines.extend(_build_fill_invoke_lines(message_name, model, indent="  "))
     lines.append("}")
     lines.append("")
     return lines

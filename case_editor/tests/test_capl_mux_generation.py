@@ -296,6 +296,50 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertNotIn("begin_burst_Media_0x32B", content)
         self.assertNotIn("cancelTimer(tmr_Media_0x32B);", content[content.index("void send_additional_Media_0x32B") : content.index("void arm_Media_0x32B")])
 
+        send_additional = content[
+            content.index("void send_additional_Media_0x32B") : content.index("void arm_Media_0x32B")
+        ]
+        self.assertEqual(send_additional.count("fill_Media_0x32B_group(14);"), 2)
+        self.assertEqual(send_additional.count("output(msg_Media_0x32B);"), 1)
+
+    def test_ce_send_additional_increments_counter(self) -> None:
+        vsysvar = MUX_VSYSVAR.replace(
+            'Media_0x32B_MsgSendType" type="int" startValue="0"',
+            'Media_0x32B_MsgSendType" type="int" startValue="3"',
+            1,
+        ).replace(
+            '<structMember name="CSW_Enable_S_SigSendType" type="int" startValue="0"',
+            '''<structMember name="Rolling_Cnt_S_Pv" type="int" startValue="0" bitcount="32" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>
+        <structMember name="Rolling_Cnt_S_Rv" type="int" startValue="0" minValue="0" maxValue="15" bitcount="32" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>
+        <structMember name="Rolling_Cnt_S_Factor" type="float" startValue="1" bitcount="64" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>
+        <structMember name="Rolling_Cnt_S_Offset" type="float" startValue="0" bitcount="64" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>
+        <structMember name="CSW_Enable_S_SigSendType" type="int" startValue="0"''',
+            1,
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
+            fh.write(vsysvar)
+            path = fh.name
+
+        parsed = parse_vsysvar(path)
+        model = parsed.messages["Media_0x32B"]
+        msg_cfg = {
+            "message_name": "Media_0x32B",
+            "has_validation": True,
+            "counter_signal": "Rolling_Cnt_S",
+            "check_signal": "",
+            "check_method": "crc16",
+            "check_parameters": {},
+        }
+        content = _build_can_file("media", "Media", 1, [(msg_cfg, model)], parsed, {model.name: 0x32B})
+
+        send_additional = content[
+            content.index("void send_additional_Media_0x32B") : content.index("void arm_Media_0x32B")
+        ]
+        fill_start = content.index("void fill_Media_0x32B_group")
+        fill_group = content[fill_start : content.index("on sysvar media::Media_0x32B.CSW_Enable_S_Pv", fill_start)]
+        self.assertIn("msg_Media_0x32B.Rolling_Cnt_S = cnt_Media_0x32B;", fill_group)
+        self.assertEqual(send_additional.count("fill_Media_0x32B_group(14);"), 2)
+
     def test_if_active_triggers_on_both_inactive_edges(self) -> None:
         vsysvar = MUX_VSYSVAR.replace(
             'Media_0x32B_MsgSendType" type="int" startValue="0"',
