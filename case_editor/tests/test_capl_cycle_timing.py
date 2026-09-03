@@ -51,6 +51,30 @@ class CaplCycleTimingGenerationTest(unittest.TestCase):
         begin = begin[: begin.index("\nvoid ")]
         self.assertIn("send_Media_0x32B();", begin)
 
+    def test_msg_on_controls_timer(self) -> None:
+        content = self._generate(MUX_VSYSVAR)
+        self.assertIn("on sysvar media::Media_0x32B_Info.Media_0x32B_MsgOn", content)
+        handler = content[
+            content.index("on sysvar media::Media_0x32B_Info.Media_0x32B_MsgOn") :
+        ]
+        handler = handler[: handler.index("\n\n")]
+        self.assertIn("@media::Media_0x32B_Info.Media_0x32B_MsgOn == 1", handler)
+        self.assertIn("fill_Media_0x32B_group(14);", handler)
+        self.assertIn("arm_Media_0x32B();", handler)
+        self.assertIn("cancelTimer(tmr_Media_0x32B);", handler)
+
+    def test_on_start_arms_only_when_msg_on(self) -> None:
+        vsysvar = MUX_VSYSVAR.replace(
+            'Media_0x32B_MsgOn" type="int" startValue="1"',
+            'Media_0x32B_MsgOn" type="int" startValue="0"',
+            1,
+        )
+        content = self._generate(vsysvar)
+        start = content[content.index("on start") : content.index("void output_all_Media_0x32B_groups")]
+        self.assertIn("if (@media::Media_0x32B_Info.Media_0x32B_MsgOn == 1)", start)
+        self.assertIn("    arm_Media_0x32B();", start)
+        self.assertNotIn("\n  arm_Media_0x32B();", start)
+
 
 if __name__ == "__main__":
     unittest.main()

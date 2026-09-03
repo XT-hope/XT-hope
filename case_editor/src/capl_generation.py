@@ -23,6 +23,8 @@ CAPL 生成器
   CA / Event / IfActive burst 均只发触发 group（或唯一 group）。
   Mux 开关信号不参与 burst 触发与影子恢复；其报文值由 fill_group(mux_id) 驱动，与用户 sysvar 赋值互不干扰。
   多路复用元数据全部来自 .vsysvar（_is_multiplexed / _is_multiplexer / _multiplexer_id），生成期写死。
+- MsgOn 控制周期 timer：MsgOn==1 时 fill+arm；MsgOn==0 时 cancelTimer。on start 亦仅在 MsgOn==1 时 arm。
+  emit/send 仍保留 MsgOn/MsgOff 门控作为兜底。
 """
 from __future__ import annotations
 
@@ -1430,6 +1432,56 @@ def _build_merged_sysvar_handlers(
     return lines
 
 
+def _build_msg_on_handler(
+    namespace: str,
+    message_name: str,
+    model: MessageModel,
+    parsed: ParsedSysvar,
+) -> List[str]:
+    """MsgOn 控制周期 timer：开启 fill+arm，关闭 cancelTimer。"""
+    if not _needs_periodic_scheduler(model):
+        return []
+    if not _info_member_exists(parsed, message_name, "_MsgOn"):
+        return []
+    sv_path = f"{namespace}::{_info_var(message_name)}.{message_name}_MsgOn"
+    msg_on = _info_sysvar(namespace, message_name, "_MsgOn", parsed, "1")
+    lines = [
+        f"on sysvar {sv_path}",
+        "{",
+        f"  if ({msg_on} == 1)",
+        "  {",
+    ]
+    lines.extend(_build_fill_invoke_lines(message_name, model, indent="    "))
+    lines.append(f"    arm_{message_name}();")
+    lines.extend([
+        "  }",
+        "  else",
+        "  {",
+        f"    cancelTimer(tmr_{message_name});",
+        "  }",
+        "}",
+        "",
+    ])
+    return lines
+
+
+def _build_on_start_arm_lines(
+    namespace: str,
+    message_name: str,
+    model: MessageModel,
+    parsed: ParsedSysvar,
+) -> List[str]:
+    if not _needs_periodic_scheduler(model):
+        return []
+    if _info_member_exists(parsed, message_name, "_MsgOn"):
+        msg_on = _info_sysvar(namespace, message_name, "_MsgOn", parsed, "1")
+        return [
+            f"  if ({msg_on} == 1)",
+            f"    arm_{message_name}();",
+        ]
+    return [f"  arm_{message_name}();"]
+
+
 def _build_timer_variables(message_name: str) -> List[str]:
     return [
         f"  msTimer tmr_{message_name};",
@@ -1513,8 +1565,7 @@ def _build_can_file(
         if _message_needs_quiet(model, exclude):
             out.append(f"  {_quiet_var(name)} = 0;")
         out.extend(_build_fill_invoke_lines(name, model))
-        if _needs_periodic_scheduler(model):
-            out.append(f"  arm_{name}();")
+        out.extend(_build_on_start_arm_lines(namespace, name, model, parsed))
     out.append("}")
     out.append("")
 
@@ -1559,6 +1610,7 @@ def _build_can_file(
             )
         )
         out.extend(_build_merged_sysvar_handlers(namespace, name, model, parsed, exclude))
+        out.extend(_build_msg_on_handler(namespace, name, model, parsed))
 
     return "\n".join(out) + "\n"
 
