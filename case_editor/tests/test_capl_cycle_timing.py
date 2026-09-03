@@ -38,18 +38,17 @@ class CaplCycleTimingGenerationTest(unittest.TestCase):
         content = self._generate(MUX_VSYSVAR)
         start = content[content.index("on start") : content.index("void output_all_Media_0x32B_groups")]
         self.assertIn("fill_Media_0x32B_group(14);", start)
-        self.assertIn("apply_Media_0x32B_CSW_Enable_S();", start)
-        self.assertLess(start.index("fill_Media_0x32B_group(14);"), start.index("apply_Media_0x32B_CSW_Enable_S();"))
-        self.assertLess(start.index("apply_Media_0x32B_CSW_Enable_S();"), start.index("arm_Media_0x32B();"))
-        self.assertNotIn("sync_Media_0x32B_payload();", start)
+        self.assertIn("sync_Media_0x32B_payload();", start)
+        self.assertLess(start.index("fill_Media_0x32B_group(14);"), start.index("sync_Media_0x32B_payload();"))
+        self.assertLess(start.index("sync_Media_0x32B_payload();"), start.index("arm_Media_0x32B();"))
 
-    def test_timer_fill_before_apply(self) -> None:
+    def test_timer_fill_before_sync(self) -> None:
         content = self._generate(MUX_VSYSVAR)
         timer = content[content.index("on timer tmr_Media_0x32B") :]
         timer = timer[: timer.index("\n\n")]
         self.assertIn("fill_Media_0x32B_group(14);", timer)
-        self.assertIn("apply_Media_0x32B_CSW_Enable_S();", timer)
-        self.assertLess(timer.index("fill_Media_0x32B_group(14);"), timer.index("apply_Media_0x32B_CSW_Enable_S();"))
+        self.assertIn("sync_Media_0x32B_payload();", timer)
+        self.assertLess(timer.index("fill_Media_0x32B_group(14);"), timer.index("sync_Media_0x32B_payload();"))
 
     def test_begin_burst_still_uses_send(self) -> None:
         vsysvar = MUX_VSYSVAR.replace(
@@ -71,9 +70,8 @@ class CaplCycleTimingGenerationTest(unittest.TestCase):
         handler = handler[: handler.index("\n\n")]
         self.assertIn("@media::Media_0x32B_Info.Media_0x32B_MsgOn == 1", handler)
         self.assertIn("fill_Media_0x32B_group(14);", handler)
-        self.assertIn("apply_Media_0x32B_CSW_Enable_S();", handler)
-        self.assertLess(handler.index("fill_Media_0x32B_group(14);"), handler.index("apply_Media_0x32B_CSW_Enable_S();"))
-        self.assertNotIn("sync_Media_0x32B_payload();", handler)
+        self.assertIn("sync_Media_0x32B_payload();", handler)
+        self.assertLess(handler.index("fill_Media_0x32B_group(14);"), handler.index("sync_Media_0x32B_payload();"))
         self.assertIn("arm_Media_0x32B();", handler)
         self.assertIn("cancelTimer(tmr_Media_0x32B);", handler)
 
