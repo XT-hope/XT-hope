@@ -16,6 +16,7 @@ CAPL 生成器
     IfActive / CA：在 {Sig}_has_inactive_value==1 时，Pv/Rv 跨越 inactive（进入或离开）都触发 burst。
 - 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；payload 在 on sysvar 中
   通过 apply_{Msg}_{Sig}() 写 msg.信号.phys = {Sig}_Pv（无 Pv 时退回 raw Rv）；fill 仅 Mux 开关 + counter + checksum。
+  prepare 顺序：先 fill（设 Mux/counter/CRC）再 apply（Mux guard 成立后写 payload）；不用 sync。
 - emit 前 refresh_crc（payload 在 sysvar 中变更后保证 CRC 与 buffer 一致）；fill 末尾同样 refresh_crc（counter 递增后）。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
@@ -26,7 +27,7 @@ CAPL 生成器
   CA / Event / IfActive burst 均只发触发 group（或唯一 group）。
   Mux 开关信号不参与 burst 触发与影子恢复；其报文值由 fill_group(mux_id) 驱动，与用户 sysvar 赋值互不干扰。
   多路复用元数据全部来自 .vsysvar（_is_multiplexed / _is_multiplexer / _multiplexer_id），生成期写死。
-- MsgOn 控制周期 timer：MsgOn==1 时 fill+arm；MsgOn==0 时 cancelTimer。on start 亦仅在 MsgOn==1 时 arm。
+- MsgOn 控制周期 timer：MsgOn==1 时 fill+apply+arm；MsgOn==0 时 cancelTimer。on start 亦仅在 MsgOn==1 时 prepare+arm。
   emit/send 仍保留 MsgOn/MsgOff 门控作为兜底。
 """
 from __future__ import annotations
@@ -815,10 +816,6 @@ def _refresh_crc_function_name(message_name: str) -> str:
     return f"refresh_crc_{message_name}"
 
 
-def _sync_payload_function_name(message_name: str) -> str:
-    return f"sync_{message_name}_payload"
-
-
 def _message_has_checksum(
     has_validation: bool,
     check_signal: str,
@@ -941,24 +938,6 @@ def _build_all_apply_functions(
     lines: List[str] = []
     for signal in _iter_payload_signals(model, counter_signal, check_signal):
         lines.extend(_build_apply_function(namespace, message_name, model, signal))
-    return lines
-
-
-def _build_sync_payload_function(
-    message_name: str,
-    model: MessageModel,
-    counter_signal: str,
-    check_signal: str,
-) -> List[str]:
-    calls = [
-        f"  {_apply_function_name(message_name, signal.name)}();"
-        for signal in _iter_payload_signals(model, counter_signal, check_signal)
-    ]
-    if not calls:
-        return []
-    lines = [f"void {_sync_payload_function_name(message_name)}()", "{"]
-    lines.extend(calls)
-    lines.extend(["}", ""])
     return lines
 
 
@@ -1247,8 +1226,12 @@ def _build_finish_burst_function(
     lines.append(f"  burst_fast_{message_name} = 0;")
     if model.mux is not None:
         lines.append(f"  {_burst_mux_var(message_name)} = -1;")
-    if _iter_payload_signals(model, counter_signal, check_signal):
-        lines.append(f"  {_sync_payload_function_name(message_name)}();")
+    lines.extend(_build_fill_invoke_lines(message_name, model, indent="  "))
+    lines.extend(
+        _build_apply_payload_invoke_lines(
+            message_name, model, counter_signal, check_signal, indent="  "
+        )
+    )
     if send_type in (MSG_SEND_EVENT, MSG_SEND_IF_ACTIVE):
         lines.append("  return;")
     else:
@@ -1277,6 +1260,19 @@ def _build_fill_invoke_lines(message_name: str, model: MessageModel, indent: str
     return []
 
 
+def _build_apply_payload_invoke_lines(
+    message_name: str,
+    model: MessageModel,
+    counter_signal: str,
+    check_signal: str,
+    indent: str = "  ",
+) -> List[str]:
+    return [
+        f"{indent}{_apply_function_name(message_name, signal.name)}();"
+        for signal in _iter_payload_signals(model, counter_signal, check_signal)
+    ]
+
+
 def _build_startup_prepare_lines(
     message_name: str,
     model: MessageModel,
@@ -1285,26 +1281,42 @@ def _build_startup_prepare_lines(
     indent: str = "  ",
 ) -> List[str]:
     lines: List[str] = []
-    if _iter_payload_signals(model, counter_signal, check_signal):
-        lines.append(f"{indent}{_sync_payload_function_name(message_name)}();")
     lines.extend(_build_fill_invoke_lines(message_name, model, indent=indent))
+    lines.extend(
+        _build_apply_payload_invoke_lines(
+            message_name, model, counter_signal, check_signal, indent=indent
+        )
+    )
     return lines
 
 
-def _build_mux_output_all_groups_function(message_name: str, model: MessageModel) -> List[str]:
-    """生成 Simple Mux 报文 fill + output 辅助函数（仅唯一 group）。"""
+def _build_mux_output_all_groups_function(
+    message_name: str,
+    model: MessageModel,
+    counter_signal: str = "",
+    check_signal: str = "",
+) -> List[str]:
+    """生成 Simple Mux 报文 fill + apply + output 辅助函数（仅唯一 group）。"""
     if model.mux is None:
         return []
     msg = _msg_var(message_name)
     group_id = model.mux.groups[0]
-    return [
+    lines = [
         f"void output_all_{message_name}_groups()",
         "{",
         f"  fill_{message_name}_group({group_id});",
+    ]
+    lines.extend(
+        _build_apply_payload_invoke_lines(
+            message_name, model, counter_signal, check_signal, indent="  "
+        )
+    )
+    lines.extend([
         f"  output({msg});",
         "}",
         "",
-    ]
+    ])
+    return lines
 
 
 def _append_burst_trigger_decls(
@@ -1594,7 +1606,7 @@ def _build_msg_on_handler(
     counter_signal: str = "",
     check_signal: str = "",
 ) -> List[str]:
-    """MsgOn 控制周期 timer：开启 sync+fill+arm，关闭 cancelTimer。"""
+    """MsgOn 控制周期 timer：开启 fill+apply+arm，关闭 cancelTimer。"""
     if not _needs_periodic_scheduler(model):
         return []
     if not _info_member_exists(parsed, message_name, "_MsgOn"):
@@ -1739,11 +1751,12 @@ def _build_can_file(
         check_sig = msg_cfg.get("check_signal", "") if msg_cfg.get("has_validation", False) else ""
         has_val = bool(msg_cfg.get("has_validation", False))
         if model.mux is not None:
-            out.extend(_build_mux_output_all_groups_function(name, model))
+            out.extend(
+                _build_mux_output_all_groups_function(name, model, counter_sig, check_sig)
+            )
         out.extend(
             _build_all_apply_functions(namespace, name, model, counter_sig, check_sig)
         )
-        out.extend(_build_sync_payload_function(name, model, counter_sig, check_sig))
         out.extend(
             _build_refresh_crc_function(
                 namespace,
@@ -1766,7 +1779,7 @@ def _build_can_file(
         if _resolve_msg_send_type(model) == MSG_SEND_CE:
             out.extend(
                 _build_send_additional_frame_function(
-                    namespace, dbc_name, sender_node, name, model, parsed, has_val, check_sig
+                    namespace, dbc_name, sender_node, name, model, parsed, has_val, counter_sig, check_sig
                 )
             )
         out.extend(_build_arm_function(namespace, name, parsed, model))
@@ -1782,10 +1795,15 @@ def _build_can_file(
                 model,
                 parsed,
                 has_val,
+                counter_sig,
                 check_sig,
             )
         )
-        out.extend(_build_send_function(namespace, dbc_name, sender_node, name, model, parsed))
+        out.extend(
+            _build_send_function(
+                namespace, dbc_name, sender_node, name, model, parsed, counter_sig, check_sig
+            )
+        )
         out.extend(
             _build_fill_function(
                 namespace,
@@ -1903,6 +1921,7 @@ def _build_send_additional_frame_function(
     model: MessageModel,
     parsed: ParsedSysvar,
     has_validation: bool = False,
+    counter_signal: str = "",
     check_signal: str = "",
 ) -> List[str]:
     """CE：OnChange/OnWrite 额外发一帧，不 cancelTimer、不改 burst_left；counter 同样叠加。"""
@@ -1920,15 +1939,35 @@ def _build_send_additional_frame_function(
         if has_checksum:
             lines.append(f"{inner_indent}{_refresh_crc_function_name(message_name)}();")
         lines.extend(_build_fill_invoke_lines(message_name, model, indent=inner_indent))
+        lines.extend(
+            _build_apply_payload_invoke_lines(
+                message_name, model, counter_signal, check_signal, indent=inner_indent
+            )
+        )
         lines.append(f"{inner_indent}output({msg});")
         lines.extend(_build_fill_invoke_lines(message_name, model, indent=inner_indent))
+        lines.extend(
+            _build_apply_payload_invoke_lines(
+                message_name, model, counter_signal, check_signal, indent=inner_indent
+            )
+        )
         lines.append("  }")
     else:
         if has_checksum:
             lines.append(f"  {_refresh_crc_function_name(message_name)}();")
         lines.extend(_build_fill_invoke_lines(message_name, model, indent="  "))
+        lines.extend(
+            _build_apply_payload_invoke_lines(
+                message_name, model, counter_signal, check_signal, indent="  "
+            )
+        )
         lines.append(f"  output({msg});")
         lines.extend(_build_fill_invoke_lines(message_name, model, indent="  "))
+        lines.extend(
+            _build_apply_payload_invoke_lines(
+                message_name, model, counter_signal, check_signal, indent="  "
+            )
+        )
     lines.append("}")
     lines.append("")
     return lines
@@ -1938,6 +1977,8 @@ def _build_periodic_timer_cycle_lines(
     message_name: str,
     model: MessageModel,
     has_checksum: bool,
+    counter_signal: str = "",
+    check_signal: str = "",
     *,
     indent: str = "  ",
 ) -> List[str]:
@@ -1946,6 +1987,11 @@ def _build_periodic_timer_cycle_lines(
         lines.append(f"{indent}{_refresh_crc_function_name(message_name)}();")
     lines.append(f"{indent}emit_{message_name}();")
     lines.extend(_build_fill_invoke_lines(message_name, model, indent=indent))
+    lines.extend(
+        _build_apply_payload_invoke_lines(
+            message_name, model, counter_signal, check_signal, indent=indent
+        )
+    )
     lines.append(f"{indent}arm_{message_name}();")
     return lines
 
@@ -1958,6 +2004,7 @@ def _build_timer_handler(
     model: MessageModel,
     parsed: ParsedSysvar,
     has_validation: bool = False,
+    counter_signal: str = "",
     check_signal: str = "",
 ) -> List[str]:
     has_checksum = _message_has_checksum(has_validation, check_signal, model)
@@ -1976,10 +2023,18 @@ def _build_timer_handler(
             "  else",
             "  {",
         ])
-        lines.extend(_build_periodic_timer_cycle_lines(message_name, model, has_checksum, indent="    "))
+        lines.extend(
+            _build_periodic_timer_cycle_lines(
+                message_name, model, has_checksum, counter_signal, check_signal, indent="    "
+            )
+        )
         lines.append("  }")
     else:
-        lines.extend(_build_periodic_timer_cycle_lines(message_name, model, has_checksum))
+        lines.extend(
+            _build_periodic_timer_cycle_lines(
+                message_name, model, has_checksum, counter_signal, check_signal
+            )
+        )
     lines.extend(["}", ""])
     return lines
 
@@ -2011,6 +2066,8 @@ def _build_send_function(
     message_name: str,
     model: MessageModel,
     parsed: "ParsedSysvar",
+    counter_signal: str = "",
+    check_signal: str = "",
 ) -> List[str]:
     msg = _msg_var(message_name)
     send_type = _resolve_msg_send_type(model)
@@ -2028,13 +2085,23 @@ def _build_send_function(
                 lines.append(f"    if ({burst_mux} >= 0)")
                 lines.append("    {")
                 lines.append(f"      fill_{message_name}_group({burst_mux});")
+                lines.extend(
+                    _build_apply_payload_invoke_lines(
+                        message_name, model, counter_signal, check_signal, indent="      "
+                    )
+                )
                 lines.append(f"      output({msg});")
                 lines.append("    }")
             lines.append("    return;")
             lines.append("  }")
         lines.append(f"  output_all_{message_name}_groups();")
     else:
-        lines.append(f"  fill_{message_name}();")
+        lines.extend(_build_fill_invoke_lines(message_name, model, indent="  "))
+        lines.extend(
+            _build_apply_payload_invoke_lines(
+                message_name, model, counter_signal, check_signal, indent="  "
+            )
+        )
         lines.append(f"  output({msg});")
     lines.append("}")
     lines.append("")

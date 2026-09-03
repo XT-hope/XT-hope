@@ -84,7 +84,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertNotIn("const long", content)
         self.assertIn("void output_all_Media_0x32B_groups()", content)
         self.assertIn("void apply_Media_0x32B_CSW_Enable_S()", content)
-        self.assertIn("void sync_Media_0x32B_payload()", content)
+        self.assertNotIn("void sync_Media_0x32B_payload()", content)
         self.assertIn("fill_Media_0x32B_group(14);", content)
         self.assertIn("output_all_Media_0x32B_groups();", content)
         self.assertIn("output(msg_Media_0x32B);", content)
@@ -104,7 +104,9 @@ class CaplMuxGenerationTest(unittest.TestCase):
         timer = timer[: timer.index("\n\n")]
         self.assertIn("emit_Media_0x32B();", timer)
         self.assertIn("fill_Media_0x32B_group(14);", timer)
+        self.assertIn("apply_Media_0x32B_CSW_Enable_S();", timer)
         self.assertLess(timer.index("emit_Media_0x32B();"), timer.index("fill_Media_0x32B_group(14);"))
+        self.assertLess(timer.index("fill_Media_0x32B_group(14);"), timer.index("apply_Media_0x32B_CSW_Enable_S();"))
         self.assertNotIn("send_Media_0x32B();", timer)
         self.assertNotIn("msTimer tmr_sched;", content)
         self.assertNotIn("timeNow()", content)
@@ -130,10 +132,11 @@ class CaplMuxGenerationTest(unittest.TestCase):
         from case_editor.src.capl_generation import _build_send_function
 
         send_body = "\n".join(
-            _build_send_function("Control", "Control", "Media", model.name, model, parsed)
+            _build_send_function("Control", "Control", "Media", model.name, model, parsed, "", "")
         )
         self.assertIn("if (burst_mux_Media_0x32B >= 0)", send_body)
         self.assertIn("fill_Media_0x32B_group(burst_mux_Media_0x32B);", send_body)
+        self.assertIn("apply_Media_0x32B_CSW_Enable_S();", send_body)
         self.assertNotIn(
             "    return;\n  }\n  if (burst_left_Media_0x32B > 0 && burst_mux_Media_0x32B >= 0)",
             send_body,
@@ -161,6 +164,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
             "    if (burst_mux_Media_0x32B >= 0)\n"
             "    {\n"
             "      fill_Media_0x32B_group(burst_mux_Media_0x32B);\n"
+            "      apply_Media_0x32B_CSW_Enable_S();\n"
             "      output(msg_Media_0x32B);\n"
             "    }\n"
             "    return;\n"
