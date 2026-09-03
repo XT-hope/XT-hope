@@ -12,15 +12,16 @@ CAPL 生成器
     Cycle / Event / IfActive / CE / CA（数值与 DBC GenMsgSendType 一致：0~4）。
     发送类型在生成期从 .vsysvar 的 {Msg}_MsgSendType 起始值解析，按类型生成对应 CAPL，
     运行时不判断报文发送类型。无 {Msg}_MsgSendType 时按纯周期调度（_MsgCycleTime，缺省 10ms）。
-- 周期发送：每条报文独立 msTimer。普通报文/单 group Mux 到期先 output（emit）再 fill，避免 fill 耗时拖后 Trace 时刻；
-  多 group Mux 同一 tick 内需逐 ID fill+output，仍走 send()。
+- 周期发送：每条报文独立 msTimer。普通报文/单 group Mux 到期先 output（emit）再 fill。
+  多 group Mux（>=2）按 mux_id 从小到大轮询发送，子周期 = MsgCycleTime / group 数，
+  每个 timer 只发一个 group（fill + output），不再 for 循环连发。
     IfActive / CA：在 {Sig}_has_inactive_value==1 时，Pv/Rv 跨越 inactive（进入或离开）都触发 burst。
 - 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；报文对象 msg.信号 赋 raw 值（Rv）。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
   时用 g_sv_quiet_* 计数器屏蔽 on sysvar，避免联动/恢复再次触发 burst。
-- 多路复用报文：周期/CE/CA 发送（含正常周期与 CE/CA 的 E/A burst）均按 multiplexer_id
-  从小到大连续 output 全部子 ID（无 delay）；纯 Event / IfActive burst 仅发送触发信号所属 group。
+- 多路复用报文：单 group 按普通周期；多 group 周期轮询各 ID（间隔 = 周期/N）。
+  CE/CA burst 仍一次 output 全部 group；纯 Event / IfActive burst 仅发送触发信号所属 group。
   Mux 开关信号不参与 burst 触发与影子恢复；其报文值由 fill_group(mux_id) 驱动，与用户 sysvar 赋值互不干扰。
   多路复用元数据全部来自 .vsysvar（_is_multiplexed / _is_multiplexer / _multiplexer_id），生成期写死。
 """
@@ -1134,8 +1135,27 @@ def _has_burst_triggers(model: MessageModel) -> bool:
     return _needs_burst_support(model)
 
 
+def _mux_idx_var(message_name: str) -> str:
+    return f"mux_idx_{message_name}"
+
+
+def _mux_ids_var(message_name: str) -> str:
+    return f"mux_ids_{message_name}"
+
+
 def _is_mux_multi_group(model: MessageModel) -> bool:
     return model.mux is not None and len(model.mux.groups) > 1
+
+
+def _build_mux_scheduler_variables(message_name: str, model: MessageModel) -> List[str]:
+    if not _is_mux_multi_group(model):
+        return []
+    groups = model.mux.groups
+    ids_literal = ", ".join(str(g) for g in groups)
+    return [
+        f"  long {_mux_idx_var(message_name)};",
+        f"  long {_mux_ids_var(message_name)}[{len(groups)}] = {{{ids_literal}}};",
+    ]
 
 
 def _build_fill_invoke_lines(message_name: str, model: MessageModel, indent: str = "  ") -> List[str]:
@@ -1143,28 +1163,7 @@ def _build_fill_invoke_lines(message_name: str, model: MessageModel, indent: str
         return [f"{indent}fill_{message_name}();"]
     if len(model.mux.groups) == 1:
         return [f"{indent}fill_{message_name}_group({model.mux.groups[0]});"]
-    return [f"{indent}prepare_all_{message_name}_groups();"]
-
-
-def _build_mux_prepare_all_groups_function(message_name: str, model: MessageModel) -> List[str]:
-    """多路复用报文按全部 multiplexer_id 连续 fill（不发 output）。"""
-    if model.mux is None:
-        return []
-    groups = model.mux.groups
-    ids_literal = ", ".join(str(g) for g in groups)
-    lines = [
-        f"void prepare_all_{message_name}_groups()",
-        "{",
-        "  int i;",
-        f"  long mux_ids[{len(groups)}] = {{{ids_literal}}};",
-        f"  for (i = 0; i < {len(groups)}; i++)",
-        "  {",
-        f"    fill_{message_name}_group(mux_ids[i]);",
-        "  }",
-        "}",
-        "",
-    ]
-    return lines
+    return []
 
 
 def _build_mux_output_all_groups_function(message_name: str, model: MessageModel) -> List[str]:
@@ -1456,7 +1455,15 @@ def _build_timer_variables(message_name: str) -> List[str]:
 
 
 def _build_initial_prepare_call(namespace: str, message_name: str, model: MessageModel) -> List[str]:
+    if _is_mux_multi_group(model):
+        return []
     return _build_fill_invoke_lines(message_name, model)
+
+
+def _build_on_start_mux_init(message_name: str, model: MessageModel) -> List[str]:
+    if _is_mux_multi_group(model):
+        return [f"  {_mux_idx_var(message_name)} = 0;"]
+    return []
 
 
 def _build_can_file(
@@ -1493,6 +1500,8 @@ def _build_can_file(
             )
         out.append(_message_decl(name, frame_id))
         out.extend(_build_timer_variables(name))
+        if _is_mux_multi_group(model):
+            out.extend(_build_mux_scheduler_variables(name, model))
         if _counter_enabled(msg_cfg, model):
             out.append(f"  long cnt_{name};")
         exclude = set()
@@ -1535,6 +1544,7 @@ def _build_can_file(
         if _message_needs_quiet(model, exclude):
             out.append(f"  {_quiet_var(name)} = 0;")
         out.extend(_build_initial_prepare_call(namespace, name, model))
+        out.extend(_build_on_start_mux_init(name, model))
         if _needs_periodic_scheduler(model):
             out.append(f"  arm_{name}();")
     out.append("}")
@@ -1549,8 +1559,6 @@ def _build_can_file(
                 if sig:
                     exclude.add(sig)
         if model.mux is not None:
-            if _is_mux_multi_group(model):
-                out.extend(_build_mux_prepare_all_groups_function(name, model))
             out.extend(_build_mux_output_all_groups_function(name, model))
         if _needs_burst_support(model):
             out.extend(_build_begin_burst_function(namespace, name, parsed, model))
@@ -1590,13 +1598,55 @@ def _fast_cycle_time_expr(namespace: str, message_name: str, parsed: ParsedSysva
     return _info_sysvar(namespace, message_name, "_MsgCycleTimeFast", parsed, cycle_expr)
 
 
+def _mux_group_count(model: MessageModel) -> int:
+    assert model.mux is not None
+    return len(model.mux.groups)
+
+
+def _append_arm_cycle_time_lines(
+    lines: List[str],
+    namespace: str,
+    message_name: str,
+    parsed: ParsedSysvar,
+    model: MessageModel,
+    *,
+    use_fast: bool = False,
+) -> None:
+    if use_fast:
+        cycle_expr = _fast_cycle_time_expr(namespace, message_name, parsed)
+    else:
+        cycle_expr = _cycle_time_expr(namespace, message_name, parsed)
+    lines.append(f"  _ct = {cycle_expr};")
+    lines.append("  if (_ct <= 0)")
+    lines.append("    _ct = 10;")
+    if _is_mux_multi_group(model):
+        group_count = _mux_group_count(model)
+        lines.append(f"  _ct = _ct / {group_count};")
+        lines.append("  if (_ct <= 0)")
+        lines.append("    _ct = 1;")
+
+
+def _build_mux_round_robin_timer_lines(message_name: str, model: MessageModel) -> List[str]:
+    msg = _msg_var(message_name)
+    group_count = _mux_group_count(model)
+    mux_ids = _mux_ids_var(message_name)
+    mux_idx = _mux_idx_var(message_name)
+    return [
+        f"  fill_{message_name}_group({mux_ids}[{mux_idx}]);",
+        f"  output({msg});",
+        f"  {mux_idx} = {mux_idx} + 1;",
+        f"  if ({mux_idx} >= {group_count})",
+        f"    {mux_idx} = 0;",
+        f"  arm_{message_name}();",
+    ]
+
+
 def _build_arm_function(
     namespace: str,
     message_name: str,
     parsed: ParsedSysvar,
     model: MessageModel,
 ) -> List[str]:
-    cycle_expr = _cycle_time_expr(namespace, message_name, parsed)
     send_type = _resolve_msg_send_type(model)
     lines = [f"void arm_{message_name}()", "{", "  long _ct;"]
     if send_type in (MSG_SEND_EVENT, MSG_SEND_IF_ACTIVE):
@@ -1605,18 +1655,29 @@ def _build_arm_function(
             "    return;",
         ])
     if _needs_burst_support(model):
-        fast_expr = _fast_cycle_time_expr(namespace, message_name, parsed)
         lines.extend([
             f"  if (burst_left_{message_name} > 0 && burst_fast_{message_name})",
-            f"    _ct = {fast_expr};",
+            "  {",
+        ])
+        _append_arm_cycle_time_lines(
+            lines, namespace, message_name, parsed, model, use_fast=True
+        )
+        lines.extend([
+            "  }",
             "  else",
-            f"    _ct = {cycle_expr};",
+            "  {",
+        ])
+        _append_arm_cycle_time_lines(
+            lines, namespace, message_name, parsed, model, use_fast=False
+        )
+        lines.extend([
+            "  }",
         ])
     else:
-        lines.append(f"  _ct = {cycle_expr};")
+        _append_arm_cycle_time_lines(
+            lines, namespace, message_name, parsed, model, use_fast=False
+        )
     lines.extend([
-        "  if (_ct <= 0)",
-        "    _ct = 10;",
         f"  setTimer(tmr_{message_name}, _ct);",
         "}",
         "",
@@ -1651,11 +1712,11 @@ def _build_timer_handler(
 ) -> List[str]:
     lines = [f"on timer tmr_{message_name}", "{"]
     if _is_mux_multi_group(model):
-        lines.append(f"  send_{message_name}();")
         if _needs_burst_support(model):
             lines.extend([
                 f"  if (burst_left_{message_name} > 0)",
                 "  {",
+                f"    send_{message_name}();",
                 f"    burst_left_{message_name}--;",
                 f"    if (burst_left_{message_name} <= 0)",
                 f"      finish_burst_{message_name}();",
@@ -1663,10 +1724,12 @@ def _build_timer_handler(
                 f"      arm_{message_name}();",
                 "  }",
                 "  else",
-                f"    arm_{message_name}();",
+                "  {",
             ])
+            lines.extend(_build_mux_round_robin_timer_lines(message_name, model))
+            lines.append("  }")
         else:
-            lines.append(f"  arm_{message_name}();")
+            lines.extend(_build_mux_round_robin_timer_lines(message_name, model))
     elif _needs_burst_support(model):
         lines.extend([
             f"  if (burst_left_{message_name} > 0)",
@@ -1743,7 +1806,8 @@ def _build_send_function(
                 lines.append("    }")
             lines.append("    return;")
             lines.append("  }")
-        lines.append(f"  output_all_{message_name}_groups();")
+        if not _is_mux_multi_group(model):
+            lines.append(f"  output_all_{message_name}_groups();")
     else:
         lines.append(f"  fill_{message_name}();")
         lines.append(f"  output({msg});")
