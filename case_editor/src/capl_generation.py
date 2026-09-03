@@ -13,14 +13,14 @@ CAPL 生成器
     发送类型在生成期从 .vsysvar 的 {Msg}_MsgSendType 起始值解析，按类型生成对应 CAPL，
     运行时不判断报文发送类型。无 {Msg}_MsgSendType 时按纯周期调度（_MsgCycleTime，缺省 10ms）。
 - 周期发送：每条报文独立 msTimer。普通报文/单 group Mux 到期先 output（emit）再 fill。
-  多 group Mux（>=2）按 mux_id 从小到大轮询发送，子周期 = MsgCycleTime / group 数，
+  多 group Mux（>=2）按 mux_id 从小到大轮询发送，帧间隔 = MsgCycleTime，
   每个 timer 只发一个 group（fill + output），不再 for 循环连发。
     IfActive / CA：在 {Sig}_has_inactive_value==1 时，Pv/Rv 跨越 inactive（进入或离开）都触发 burst。
 - 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；报文对象 msg.信号 赋 raw 值（Rv）。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
   时用 g_sv_quiet_* 计数器屏蔽 on sysvar，避免联动/恢复再次触发 burst。
-- 多路复用报文：单 group 按普通周期；多 group 周期轮询各 ID（间隔 = 周期/N）。
+- 多路复用报文：单 group 按普通周期；多 group 周期轮询各 ID（帧间隔 = MsgCycleTime）。
   CE/CA burst 仍一次 output 全部 group；纯 Event / IfActive burst 仅发送触发信号所属 group。
   Mux 开关信号不参与 burst 触发与影子恢复；其报文值由 fill_group(mux_id) 驱动，与用户 sysvar 赋值互不干扰。
   多路复用元数据全部来自 .vsysvar（_is_multiplexed / _is_multiplexer / _multiplexer_id），生成期写死。
@@ -1619,11 +1619,6 @@ def _append_arm_cycle_time_lines(
     lines.append(f"  _ct = {cycle_expr};")
     lines.append("  if (_ct <= 0)")
     lines.append("    _ct = 10;")
-    if _is_mux_multi_group(model):
-        group_count = _mux_group_count(model)
-        lines.append(f"  _ct = _ct / {group_count};")
-        lines.append("  if (_ct <= 0)")
-        lines.append("    _ct = 1;")
 
 
 def _build_mux_round_robin_timer_lines(message_name: str, model: MessageModel) -> List[str]:

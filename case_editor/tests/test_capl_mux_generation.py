@@ -424,7 +424,8 @@ class CaplMuxMultiGroupGenerationTest(unittest.TestCase):
         self.assertNotIn("fill_Media_0x32B_group", start)
 
         arm = content[content.index("void arm_Media_0x32B") : content.index("void emit_Media_0x32B")]
-        self.assertIn("_ct = _ct / 2;", arm)
+        self.assertIn("_ct = @media::Media_0x32B_Info.Media_0x32B_MsgCycleTime;", arm)
+        self.assertNotIn("_ct = _ct / 2;", arm)
 
         timer = content[content.index("on timer tmr_Media_0x32B") : content.index("void send_Media_0x32B")]
         self.assertIn("fill_Media_0x32B_group(mux_ids_Media_0x32B[mux_idx_Media_0x32B]);", timer)
