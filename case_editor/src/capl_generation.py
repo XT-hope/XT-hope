@@ -21,7 +21,8 @@ CAPL 生成器
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
   时用 g_sv_quiet_* 计数器屏蔽 on sysvar，避免联动/恢复再次触发 burst。
 - 多路复用报文：单 group 按普通周期；多 group 周期轮询各 ID（帧间隔 = MsgCycleTime）。
-  CE/CA burst 仍一次 output 全部 group；纯 Event / IfActive burst 仅发送触发信号所属 group。
+  CE OnChange/OnWrite 额外发一帧（触发信号所在 group），不打断周期 timer；CA burst 仍 output 全部 group；
+  纯 Event / IfActive burst 仅发送触发信号所属 group。
   Mux 开关信号不参与 burst 触发与影子恢复；其报文值由 fill_group(mux_id) 驱动，与用户 sysvar 赋值互不干扰。
   多路复用元数据全部来自 .vsysvar（_is_multiplexed / _is_multiplexer / _multiplexer_id），生成期写死。
 """
@@ -491,6 +492,11 @@ def _resolve_msg_send_type(model: MessageModel) -> int:
     if model.info is not None and model.info.has_msg_send_type:
         return model.info.msg_send_type_value
     return MSG_SEND_CYCLE
+
+
+def _uses_begin_burst_send(model: MessageModel) -> bool:
+    """begin_burst / finish_burst / burst_left 发送路径：Event、IfActive、CA。"""
+    return _resolve_msg_send_type(model) in (MSG_SEND_EVENT, MSG_SEND_IF_ACTIVE, MSG_SEND_CA)
 
 
 def _needs_burst_support(model: MessageModel) -> bool:
@@ -1261,7 +1267,6 @@ def _append_burst_trigger_lines(
             )
             lines.append("    {")
             lines.append("      _triggered = 1;")
-            lines.append("      _use_fast = 1;")
             lines.append("    }")
         if sig_table.on_write is not None:
             keyword = "if" if first_branch else "else if"
@@ -1269,7 +1274,6 @@ def _append_burst_trigger_lines(
             lines.append(f"    {keyword} ({sig_send_type_expr} == {sig_table.on_write})")
             lines.append("    {")
             lines.append("      _triggered = 1;")
-            lines.append("      _use_fast = 1;")
             lines.append("    }")
     elif send_type == MSG_SEND_CA and inactive_edge_cmp and sig_send_type_expr and sig_table and sig_table.cycle is not None:
         lines.append(
@@ -1283,17 +1287,28 @@ def _append_burst_trigger_lines(
 
     lines.append("    if (_triggered)")
     lines.append("    {")
-    lines.append(f"      {_restore_pending_var(message_name, member)} = 1;")
-    lines.append(f"      {_restore_var(message_name, member)} = _old;")
-    lines.append(f"      {shadow} = _new;")
-    if model.mux is not None and send_type in (MSG_SEND_EVENT, MSG_SEND_IF_ACTIVE):
-        burst_mux = _burst_mux_var(message_name)
-        if signal.has_multiplexer_id and signal.multiplexer_id is not None:
-            mux_group = signal.multiplexer_id
+    if send_type == MSG_SEND_CE:
+        lines.append(f"      {shadow} = _new;")
+        if model.mux is not None:
+            if signal.has_multiplexer_id and signal.multiplexer_id is not None:
+                mux_group = signal.multiplexer_id
+            else:
+                mux_group = model.mux.groups[0]
+            lines.append(f"      send_additional_{message_name}({mux_group});")
         else:
-            mux_group = model.mux.groups[0]
-        lines.append(f"      {burst_mux} = {mux_group};")
-    lines.append(f"      begin_burst_{message_name}(_use_fast);")
+            lines.append(f"      send_additional_{message_name}();")
+    else:
+        lines.append(f"      {_restore_pending_var(message_name, member)} = 1;")
+        lines.append(f"      {_restore_var(message_name, member)} = _old;")
+        lines.append(f"      {shadow} = _new;")
+        if model.mux is not None and send_type in (MSG_SEND_EVENT, MSG_SEND_IF_ACTIVE):
+            burst_mux = _burst_mux_var(message_name)
+            if signal.has_multiplexer_id and signal.multiplexer_id is not None:
+                mux_group = signal.multiplexer_id
+            else:
+                mux_group = model.mux.groups[0]
+            lines.append(f"      {burst_mux} = {mux_group};")
+        lines.append(f"      begin_burst_{message_name}(_use_fast);")
     lines.append("    }")
     lines.append("    else")
     lines.append(f"      {shadow} = _new;")
@@ -1561,9 +1576,15 @@ def _build_can_file(
                     exclude.add(sig)
         if model.mux is not None:
             out.extend(_build_mux_output_all_groups_function(name, model))
-        if _needs_burst_support(model):
+        if _uses_begin_burst_send(model):
             out.extend(_build_begin_burst_function(namespace, name, parsed, model))
             out.extend(_build_finish_burst_function(namespace, name, model, parsed, exclude))
+        if _resolve_msg_send_type(model) == MSG_SEND_CE:
+            out.extend(
+                _build_send_additional_frame_function(
+                    namespace, dbc_name, sender_node, name, model, parsed
+                )
+            )
         out.extend(_build_arm_function(namespace, name, parsed, model))
         out.extend(
             _build_emit_function(namespace, dbc_name, sender_node, name, model, parsed)
@@ -1698,6 +1719,35 @@ def _build_emit_function(
     return lines
 
 
+def _build_send_additional_frame_function(
+    namespace: str,
+    dbc_name: str,
+    sender_node: str,
+    message_name: str,
+    model: MessageModel,
+    parsed: ParsedSysvar,
+) -> List[str]:
+    """CE：OnChange/OnWrite 在周期之外额外发一帧，不 cancelTimer、不改 burst_left。"""
+    msg = _msg_var(message_name)
+    if model.mux is not None:
+        lines = [f"void send_additional_{message_name}(long mux_id)", "{"]
+    else:
+        lines = [f"void send_additional_{message_name}()", "{"]
+    _append_send_gate_lines(lines, namespace, dbc_name, sender_node, message_name, parsed)
+    if model.mux is not None:
+        lines.append("  if (mux_id >= 0)")
+        lines.append("  {")
+        lines.append(f"    fill_{message_name}_group(mux_id);")
+        lines.append(f"    output({msg});")
+        lines.append("  }")
+    else:
+        lines.extend(_build_fill_invoke_lines(message_name, model, indent="  "))
+        lines.append(f"  output({msg});")
+    lines.append("}")
+    lines.append("")
+    return lines
+
+
 def _build_timer_handler(
     namespace: str,
     dbc_name: str,
@@ -1708,7 +1758,7 @@ def _build_timer_handler(
 ) -> List[str]:
     lines = [f"on timer tmr_{message_name}", "{"]
     if _is_mux_multi_group(model):
-        if _needs_burst_support(model):
+        if _uses_begin_burst_send(model):
             lines.extend([
                 f"  if (burst_left_{message_name} > 0)",
                 "  {",
@@ -1726,7 +1776,7 @@ def _build_timer_handler(
             lines.append("  }")
         else:
             lines.extend(_build_mux_round_robin_timer_lines(message_name, model))
-    elif _needs_burst_support(model):
+    elif _uses_begin_burst_send(model):
         lines.extend([
             f"  if (burst_left_{message_name} > 0)",
             "  {",
@@ -1788,11 +1838,11 @@ def _build_send_function(
     _append_send_gate_lines(lines, namespace, dbc_name, sender_node, message_name, parsed)
 
     if model.mux is not None:
-        if _needs_burst_support(model):
+        if _uses_begin_burst_send(model):
             burst_mux = _burst_mux_var(message_name)
             lines.append(f"  if (burst_left_{message_name} > 0)")
             lines.append("  {")
-            if send_type in (MSG_SEND_CE, MSG_SEND_CA):
+            if send_type in (MSG_SEND_CA,):
                 lines.append(f"    output_all_{message_name}_groups();")
             else:
                 lines.append(f"    if ({burst_mux} >= 0)")
