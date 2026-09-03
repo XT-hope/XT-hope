@@ -83,8 +83,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertNotIn("g_mux_groups_", content)
         self.assertNotIn("const long", content)
         self.assertIn("void output_all_Media_0x32B_groups()", content)
-        self.assertIn("long mux_ids[1] = {14};", content)
-        self.assertIn("fill_Media_0x32B_group(mux_ids[i]);", content)
+        self.assertIn("fill_Media_0x32B_group(14);", content)
         self.assertIn("output_all_Media_0x32B_groups();", content)
         self.assertIn("output(msg_Media_0x32B);", content)
         self.assertIn("if (mux_id == 14)", content)
@@ -395,7 +394,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn("CSW_Enable_S", content)
         self.assertIn("Other_S", content)
 
-    def test_output_all_groups_uses_nonconst_array_for_multiple_ids(self) -> None:
+    def test_output_all_groups_fills_single_mux_id(self) -> None:
         from case_editor.src.capl_generation import (
             MessageModel,
             MuxMetadata,
@@ -408,70 +407,16 @@ class CaplMuxGenerationTest(unittest.TestCase):
             mux=MuxMetadata(
                 mux_signal_name="Mux_S",
                 mux_signal=mux_signal,
-                groups=[1, 14, 3, 12, 13],
+                groups=[14],
                 initial_value="0",
             ),
         )
         content = "\n".join(_build_mux_output_all_groups_function("Msg_A", model))
         self.assertIn("void output_all_Msg_A_groups()", content)
-        self.assertIn("long mux_ids[5] = {1, 14, 3, 12, 13};", content)
-        self.assertNotIn("const long", content)
-        self.assertIn("for (i = 0; i < 5; i++)", content)
-        self.assertIn("fill_Msg_A_group(mux_ids[i]);", content)
+        self.assertIn("fill_Msg_A_group(14);", content)
         self.assertIn("output(msg_Msg_A);", content)
-        self.assertNotIn("fill_Msg_A_group(1);", content)
-
-
-MULTI_MUX_VSYSVAR = MUX_VSYSVAR.replace(
-    '      </struct>\n      <variable name="Media_0x32B"',
-    '''        <structMember name="Other_S_Pv" type="int" startValue="0" bitcount="32" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>
-        <structMember name="Other_S_Rv" type="int" startValue="0" bitcount="32" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>
-        <structMember name="Other_S_Factor" type="float" startValue="1" bitcount="64" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>
-        <structMember name="Other_S_Offset" type="float" startValue="0" bitcount="64" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>
-        <structMember name="Other_S_multiplexer_id" type="int" startValue="3" minValue="0" maxValue="255" bitcount="32" isSigned="false" encoding="65001" relativeOffset="0" byteOrder="0" isOptional="False" isHidden="False" comment=""/>
-      </struct>
-      <variable name="Media_0x32B"''',
-    1,
-)
-
-
-class CaplMuxMultiGroupGenerationTest(unittest.TestCase):
-    def test_multi_mux_round_robin_timer(self) -> None:
-        with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
-            fh.write(MULTI_MUX_VSYSVAR)
-            path = fh.name
-
-        parsed = parse_vsysvar(path)
-        model = parsed.messages["Media_0x32B"]
-        self.assertEqual(model.mux.groups, [3, 14])
-        msg_cfg = {"message_name": "Media_0x32B", "has_validation": False}
-        content = _build_can_file("media", "Media", 1, [(msg_cfg, model)], parsed, {model.name: 0x32B})
-
-        self.assertIn("long mux_idx_Media_0x32B;", content)
-        self.assertIn("long mux_ids_Media_0x32B[2] = {3, 14};", content)
-        self.assertNotIn("prepare_all_Media_0x32B_groups", content)
-
-        start = content[content.index("on start") : content.index("void output_all_Media_0x32B_groups")]
-        self.assertIn("mux_idx_Media_0x32B = 0;", start)
-        self.assertNotIn("prepare_all", start)
-        self.assertIn("fill_Media_0x32B_group(mux_ids_Media_0x32B[0]);", start)
-        self.assertLess(
-            start.index("fill_Media_0x32B_group(mux_ids_Media_0x32B[0]);"),
-            start.index("arm_Media_0x32B();"),
-        )
-
-        arm = content[content.index("void arm_Media_0x32B") : content.index("void emit_Media_0x32B")]
-        self.assertIn("_ct = @media::Media_0x32B_Info.Media_0x32B_MsgCycleTime;", arm)
-        self.assertNotIn("_ct = _ct / 2;", arm)
-
-        timer = content[content.index("on timer tmr_Media_0x32B") : content.index("void send_Media_0x32B")]
-        self.assertIn("fill_Media_0x32B_group(mux_ids_Media_0x32B[mux_idx_Media_0x32B]);", timer)
-        self.assertIn("output(msg_Media_0x32B);", timer)
-        self.assertIn("mux_idx_Media_0x32B = mux_idx_Media_0x32B + 1;", timer)
-        self.assertIn("if (mux_idx_Media_0x32B >= 2)", timer)
-        self.assertIn("arm_Media_0x32B();", timer)
-        self.assertNotIn("send_Media_0x32B();", timer)
-        self.assertNotIn("for (i = 0;", timer)
+        self.assertNotIn("for (i = 0;", content)
+        self.assertNotIn("mux_ids", content)
 
 
 if __name__ == "__main__":
