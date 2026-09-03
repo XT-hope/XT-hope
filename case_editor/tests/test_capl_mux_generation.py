@@ -83,10 +83,20 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertNotIn("g_mux_groups_", content)
         self.assertNotIn("const long", content)
         self.assertIn("void output_all_Media_0x32B_groups()", content)
+        self.assertIn("void apply_Media_0x32B_CSW_Enable_S()", content)
+        self.assertIn("void sync_Media_0x32B_payload()", content)
         self.assertIn("fill_Media_0x32B_group(14);", content)
         self.assertIn("output_all_Media_0x32B_groups();", content)
         self.assertIn("output(msg_Media_0x32B);", content)
-        self.assertIn("if (mux_id == 14)", content)
+        self.assertIn("msg_Media_0x32B.CSW_Enable_S.phys = @media::Media_0x32B.CSW_Enable_S_Pv;", content)
+        self.assertIn("if (msg_Media_0x32B.Child_ID_32B_S == 14)", content)
+        self.assertIn("apply_Media_0x32B_CSW_Enable_S();", content)
+        pv = content[content.index("on sysvar media::Media_0x32B.CSW_Enable_S_Pv") :]
+        pv = pv[: pv.index("\n\n")]
+        rv = content[content.index("on sysvar media::Media_0x32B.CSW_Enable_S_Rv") :]
+        rv = rv[: rv.index("\n\n")]
+        self.assertIn("apply_Media_0x32B_CSW_Enable_S();", pv)
+        self.assertNotIn("apply_Media_0x32B_CSW_Enable_S();", rv)
         self.assertIn("msTimer tmr_Media_0x32B;", content)
         self.assertIn("void emit_Media_0x32B()", content)
         self.assertIn("on timer tmr_Media_0x32B", content)
@@ -316,24 +326,29 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn(f"(_old != ({inactive}) && _new == ({inactive}))", content)
         self.assertNotIn(f"== {MSG_SEND_IF_ACTIVE}", content)
 
-    def test_fill_uses_rv_not_pv_for_signal_assignment(self) -> None:
+    def test_apply_uses_phys_pv_not_in_fill(self) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
             fh.write(MUX_VSYSVAR)
             path = fh.name
 
         parsed = parse_vsysvar(path)
         model = parsed.messages["Media_0x32B"]
-        from case_editor.src.capl_generation import _build_fill_group_function
+        from case_editor.src.capl_generation import _build_all_apply_functions, _build_fill_group_function
 
-        lines = _build_fill_group_function(
-            "media", model.name, model, parsed, False, "", "", "crc16", {}
+        fill_content = "\n".join(
+            _build_fill_group_function(
+                "media", model.name, model, parsed, False, "", "", "crc16", {}
+            )
         )
-        content = "\n".join(lines)
-        self.assertIn("msg_Media_0x32B.CSW_Enable_S = @media::Media_0x32B.CSW_Enable_S_Rv;", content)
-        self.assertNotIn("CSW_Enable_S_Pv;", content)
+        apply_content = "\n".join(
+            _build_all_apply_functions("media", model.name, model, "", "")
+        )
+        self.assertNotIn("CSW_Enable_S.phys", fill_content)
+        self.assertIn("msg_Media_0x32B.CSW_Enable_S.phys = @media::Media_0x32B.CSW_Enable_S_Pv;", apply_content)
+        self.assertIn("if (msg_Media_0x32B.Child_ID_32B_S == 14)", apply_content)
 
     def test_crc_uses_byte_array_for_checksum_lib(self) -> None:
-        from case_editor.src.capl_generation import CHECKSUM_LIB, _build_fill_plain_function
+        from case_editor.src.capl_generation import CHECKSUM_LIB, _build_refresh_crc_function
 
         self.assertIn("word PROJ_CRC16_CCITT(byte data[], long len", CHECKSUM_LIB)
         self.assertNotIn("message msg", CHECKSUM_LIB)
@@ -352,18 +367,18 @@ class CaplMuxGenerationTest(unittest.TestCase):
 
         parsed = parse_vsysvar(path)
         model = parsed.messages["Media_0x32B"]
-        lines = _build_fill_plain_function(
+        lines = _build_refresh_crc_function(
             "media",
             model.name,
             model,
             parsed,
             True,
-            "",
             "CRC_S",
             "crc16",
             {"poly": "0x1021", "init": "0xFFFF", "xorOut": "0x0000"},
         )
         content = "\n".join(lines)
+        self.assertIn("void refresh_crc_Media_0x32B()", content)
         self.assertIn("PROJ_CRC16_CCITT(_data, _n, 0xFFFF, 0x1021, 0x0000);", content)
         self.assertIn("_data[", content)
         self.assertIn(".byte(_i)", content)
@@ -384,13 +399,13 @@ class CaplMuxGenerationTest(unittest.TestCase):
         model.signals.append(clone)
         model.signal_index["Other_S"] = clone
 
-        from case_editor.src.capl_generation import _build_fill_group_function
+        from case_editor.src.capl_generation import _build_all_apply_functions
 
-        lines = _build_fill_group_function(
-            "media", model.name, model, parsed, False, "", "", "crc16", {}
+        lines = _build_all_apply_functions(
+            "media", model.name, model, "", ""
         )
         content = "\n".join(lines)
-        self.assertEqual(content.count("if (mux_id == 14)"), 1)
+        self.assertEqual(content.count("if (msg_Media_0x32B.Child_ID_32B_S == 14)"), 2)
         self.assertIn("CSW_Enable_S", content)
         self.assertIn("Other_S", content)
 

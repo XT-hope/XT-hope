@@ -36,8 +36,10 @@ class CaplCycleTimingGenerationTest(unittest.TestCase):
 
     def test_on_start_prepares_before_first_arm(self) -> None:
         content = self._generate(MUX_VSYSVAR)
-        start = content[content.index("on start") : content.index("void emit_Media_0x32B")]
+        start = content[content.index("on start") : content.index("void output_all_Media_0x32B_groups")]
+        self.assertIn("sync_Media_0x32B_payload();", start)
         self.assertIn("fill_Media_0x32B_group(14);", start)
+        self.assertLess(start.index("sync_Media_0x32B_payload();"), start.index("fill_Media_0x32B_group(14);"))
         self.assertLess(start.index("fill_Media_0x32B_group(14);"), start.index("arm_Media_0x32B();"))
 
     def test_begin_burst_still_uses_send(self) -> None:
@@ -60,6 +62,7 @@ class CaplCycleTimingGenerationTest(unittest.TestCase):
         handler = handler[: handler.index("\n\n")]
         self.assertIn("@media::Media_0x32B_Info.Media_0x32B_MsgOn == 1", handler)
         self.assertIn("fill_Media_0x32B_group(14);", handler)
+        self.assertIn("sync_Media_0x32B_payload();", handler)
         self.assertIn("arm_Media_0x32B();", handler)
         self.assertIn("cancelTimer(tmr_Media_0x32B);", handler)
 
