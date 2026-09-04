@@ -14,8 +14,8 @@ CAPL 生成器
     运行时不判断报文发送类型。无 {Msg}_MsgSendType 时按纯周期调度（_MsgCycleTime，缺省 10ms）。
 - 周期发送：每条报文独立 msTimer。到期先 output（emit）再 fill，帧间隔 = MsgCycleTime。
     IfActive / CA：在 {Sig}_has_inactive_value==1 时，Pv/Rv 跨越 inactive（进入或离开）都触发 burst。
-- 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；payload 在 fill 中写 msg.信号
-  （优先 Rv，无 Rv 时由 Pv 按 Factor/Offset 反算 raw）。
+- 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；payload 在 fill 中写
+  msg.信号.phys = {Sig}_Pv（无 Pv 时退回 raw Rv）。
 - 周期 timer：emit 后再 fill 为下一帧 prepare；fill 末尾计算 counter/checksum。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
@@ -905,37 +905,32 @@ def _build_fill_body_lines(
 def _build_signal_assignment(namespace: str, message_name: str, signal: SignalModel) -> List[str]:
     msg = _msg_var(message_name)
     target = f"{msg}.{signal.name}"
-    factor_lit = _format_float(signal.factor, "1")
-    offset_lit = _format_float(signal.offset, "0")
 
-    if signal.has_rv:
-        normal_value = _sysvar(namespace, message_name, f"{signal.name}_Rv")
-    elif signal.has_pv:
-        pv = _sysvar(namespace, message_name, f"{signal.name}_Pv")
-        normal_value = f"(({pv}) - ({offset_lit})) / ({factor_lit})"
+    if signal.has_pv:
+        normal_assign = f"{target}.phys = {_sysvar(namespace, message_name, f'{signal.name}_Pv')};"
+    elif signal.has_rv:
+        normal_assign = f"{target} = {_sysvar(namespace, message_name, f'{signal.name}_Rv')};"
     else:
-        normal_value = "0"
+        return []
 
     lines: List[str] = []
-    branches: List[Tuple[str, str]] = []
     if signal.has_special_value:
         has_special = _sysvar(namespace, message_name, f"{signal.name}_has_special_value")
         use_special = _sysvar(namespace, message_name, f"{signal.name}_use_special_value")
         special_value = _sysvar(namespace, message_name, f"{signal.name}_special_value")
-        branches.append(
-            (f"{has_special} == 1 && {use_special} == 1", special_value)
-        )
+        if signal.has_pv:
+            special_assign = f"{target}.phys = {special_value};"
+        else:
+            special_assign = f"{target} = {special_value};"
+        lines.extend([
+            f"  if ({has_special} == 1 && {use_special} == 1)",
+            f"    {special_assign}",
+            "  else",
+            f"    {normal_assign}",
+        ])
+    else:
+        lines.append(f"  {normal_assign}")
 
-    if not branches:
-        lines.append(f"  {target} = {normal_value};")
-        return lines
-
-    for idx, (cond, value) in enumerate(branches):
-        keyword = "if" if idx == 0 else "else if"
-        lines.append(f"  {keyword} ({cond})")
-        lines.append(f"    {target} = {value};")
-    lines.append("  else")
-    lines.append(f"    {target} = {normal_value};")
     return lines
 
 

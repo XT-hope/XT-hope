@@ -91,12 +91,11 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn("long mux_idx_Media_0x32B;", content)
         self.assertNotIn("output_all_Media_0x32B_groups();", content)
         self.assertIn("output(msg_Media_0x32B);", content)
-        self.assertIn("msg_Media_0x32B.CSW_Enable_S = @media::Media_0x32B.CSW_Enable_S_Rv;", content)
+        self.assertIn("msg_Media_0x32B.CSW_Enable_S.phys = @media::Media_0x32B.CSW_Enable_S_Pv;", content)
         self.assertIn("if (mux_id == 14)", content)
         self.assertNotIn("void apply_Media_0x32B_CSW_Enable_S()", content)
         self.assertNotIn("void sync_Media_0x32B_payload()", content)
         self.assertNotIn("sync_Media_0x32B_payload();", content)
-        self.assertNotIn("CSW_Enable_S.phys", content)
         pv = content[content.index("on sysvar media::Media_0x32B.CSW_Enable_S_Pv") :]
         pv = pv[: pv.index("\n\n")]
         rv = content[content.index("on sysvar media::Media_0x32B.CSW_Enable_S_Rv") :]
@@ -380,7 +379,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn(f"(_old != ({inactive}) && _new == ({inactive}))", content)
         self.assertNotIn(f"== {MSG_SEND_IF_ACTIVE}", content)
 
-    def test_fill_writes_raw_rv_not_phys(self) -> None:
+    def test_fill_uses_phys_pv_not_in_sysvar(self) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
             fh.write(MUX_VSYSVAR)
             path = fh.name
@@ -394,8 +393,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
                 "media", model.name, model, parsed, False, "", "", "crc16", {}
             )
         )
-        self.assertIn("msg_Media_0x32B.CSW_Enable_S = @media::Media_0x32B.CSW_Enable_S_Rv;", fill_content)
-        self.assertNotIn("CSW_Enable_S.phys", fill_content)
+        self.assertIn("msg_Media_0x32B.CSW_Enable_S.phys = @media::Media_0x32B.CSW_Enable_S_Pv;", fill_content)
         self.assertIn("if (mux_id == 14)", fill_content)
 
     def test_crc_uses_byte_array_for_checksum_lib(self) -> None:
