@@ -56,6 +56,9 @@ MUX_VSYSVAR = """<?xml version="1.0" encoding="utf-8"?>
 """
 
 
+MUX_FILL = "fill_Media_0x32B_group(mux_ids_Media_0x32B[mux_idx_Media_0x32B]);"
+
+
 class CaplMuxGenerationTest(unittest.TestCase):
     def test_parse_mux_metadata(self) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
@@ -85,9 +88,11 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn("void output_all_Media_0x32B_groups()", content)
         self.assertIn("void apply_Media_0x32B_CSW_Enable_S()", content)
         self.assertIn("void sync_Media_0x32B_payload()", content)
-        self.assertIn("fill_Media_0x32B_group(14);", content)
+        self.assertIn(MUX_FILL, content)
         self.assertIn("sync_Media_0x32B_payload();", content)
-        self.assertIn("output_all_Media_0x32B_groups();", content)
+        self.assertIn("long mux_ids_Media_0x32B[1] = {14};", content)
+        self.assertIn("long mux_idx_Media_0x32B;", content)
+        self.assertNotIn("output_all_Media_0x32B_groups();", content)
         self.assertIn("output(msg_Media_0x32B);", content)
         self.assertIn("msg_Media_0x32B.CSW_Enable_S.phys = @media::Media_0x32B.CSW_Enable_S_Pv;", content)
         self.assertIn("if (msg_Media_0x32B.Child_ID_32B_S == 14)", content)
@@ -103,11 +108,11 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn("on timer tmr_Media_0x32B", content)
         timer = content[content.index("on timer tmr_Media_0x32B") :]
         timer = timer[: timer.index("\n\n")]
-        self.assertIn("emit_Media_0x32B();", timer)
-        self.assertIn("fill_Media_0x32B_group(14);", timer)
-        self.assertIn("sync_Media_0x32B_payload();", timer)
-        self.assertLess(timer.index("emit_Media_0x32B();"), timer.index("fill_Media_0x32B_group(14);"))
-        self.assertLess(timer.index("fill_Media_0x32B_group(14);"), timer.index("sync_Media_0x32B_payload();"))
+        self.assertIn(MUX_FILL, timer)
+        self.assertIn("output(msg_Media_0x32B);", timer)
+        self.assertIn("if (mux_idx_Media_0x32B >= 1)", timer)
+        self.assertNotIn("emit_Media_0x32B();", timer)
+        self.assertNotIn("sync_Media_0x32B_payload();", timer)
         self.assertNotIn("send_Media_0x32B();", timer)
         self.assertNotIn("msTimer tmr_sched;", content)
         self.assertNotIn("timeNow()", content)
@@ -200,8 +205,9 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertNotIn("begin_burst_Media_0x32B", content)
         self.assertIn("  arm_Media_0x32B();", content)
         self.assertIn("on timer tmr_Media_0x32B", content)
-        self.assertIn("emit_Media_0x32B();", content)
-        self.assertIn("fill_Media_0x32B_group(14);", content)
+        self.assertIn(MUX_FILL, content)
+        self.assertNotIn("emit_Media_0x32B();", content[content.index("on timer tmr_Media_0x32B") :])
+        self.assertIn("long mux_ids_Media_0x32B[1] = {14};", content)
         self.assertNotIn("send_Media_0x32B();", content[content.index("on timer tmr_Media_0x32B") : content.index("void send_Media_0x32B")])
         self.assertIn("setTimer(tmr_Media_0x32B, _ct);", content)
         self.assertIn("  _ct = @media::Media_0x32B_Info.Media_0x32B_MsgCycleTime;", content)
@@ -304,7 +310,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
         send_additional = content[
             content.index("void send_additional_Media_0x32B") : content.index("void arm_Media_0x32B")
         ]
-        self.assertEqual(send_additional.count("fill_Media_0x32B_group(14);"), 2)
+        self.assertEqual(send_additional.count("fill_Media_0x32B_group(mux_id);"), 2)
         self.assertEqual(send_additional.count("output(msg_Media_0x32B);"), 1)
 
     def test_ce_send_additional_increments_counter(self) -> None:
@@ -343,7 +349,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
         fill_start = content.index("void fill_Media_0x32B_group")
         fill_group = content[fill_start : content.index("on sysvar media::Media_0x32B.CSW_Enable_S_Pv", fill_start)]
         self.assertIn("msg_Media_0x32B.Rolling_Cnt_S = cnt_Media_0x32B;", fill_group)
-        self.assertEqual(send_additional.count("fill_Media_0x32B_group(14);"), 2)
+        self.assertEqual(send_additional.count("fill_Media_0x32B_group(mux_id);"), 2)
 
     def test_if_active_triggers_on_both_inactive_edges(self) -> None:
         vsysvar = MUX_VSYSVAR.replace(
@@ -458,7 +464,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn("CSW_Enable_S", content)
         self.assertIn("Other_S", content)
 
-    def test_output_all_groups_fills_single_mux_id(self) -> None:
+    def test_output_all_groups_loops_mux_ids(self) -> None:
         from case_editor.src.capl_generation import (
             MessageModel,
             MuxMetadata,
@@ -477,10 +483,10 @@ class CaplMuxGenerationTest(unittest.TestCase):
         )
         content = "\n".join(_build_mux_output_all_groups_function("Msg_A", model))
         self.assertIn("void output_all_Msg_A_groups()", content)
-        self.assertIn("fill_Msg_A_group(14);", content)
+        self.assertIn("long mux_ids[1] = {14};", content)
+        self.assertIn("for (i = 0; i < 1; i++)", content)
+        self.assertIn("fill_Msg_A_group(mux_ids[i]);", content)
         self.assertIn("output(msg_Msg_A);", content)
-        self.assertNotIn("for (i = 0;", content)
-        self.assertNotIn("mux_ids", content)
 
     def test_output_all_groups_loops_multiple_mux_ids(self) -> None:
         from case_editor.src.capl_generation import (

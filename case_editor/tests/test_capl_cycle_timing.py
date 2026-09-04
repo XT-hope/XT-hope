@@ -1,4 +1,4 @@
-"""周期报文：独立 msTimer，到期先 emit(output) 再 fill。"""
+"""周期报文：独立 msTimer；Mux 报文走 mux_idx 轮询。"""
 from __future__ import annotations
 
 import tempfile
@@ -6,6 +6,8 @@ import unittest
 
 from case_editor.src.capl_generation import _build_can_file, parse_vsysvar
 from case_editor.tests.test_capl_mux_generation import MUX_VSYSVAR
+
+MUX_FILL = "fill_Media_0x32B_group(mux_ids_Media_0x32B[mux_idx_Media_0x32B]);"
 
 
 class CaplCycleTimingGenerationTest(unittest.TestCase):
@@ -18,37 +20,29 @@ class CaplCycleTimingGenerationTest(unittest.TestCase):
         msg_cfg = {"message_name": "Media_0x32B", "has_validation": False}
         return _build_can_file("media", "Media", 1, [(msg_cfg, model)], parsed, {model.name: 0x32B})
 
-    def test_timer_emits_before_fill(self) -> None:
+    def test_mux_timer_round_robin(self) -> None:
         content = self._generate(MUX_VSYSVAR)
-        self.assertIn("void emit_Media_0x32B()", content)
-        self.assertIn("output(msg_Media_0x32B);", content)
+        self.assertIn("long mux_ids_Media_0x32B[1] = {14};", content)
         self.assertNotIn("timeNow()", content)
         self.assertNotIn("tmr_sched", content)
 
         timer = content[content.index("on timer tmr_Media_0x32B") :]
         timer = timer[: timer.index("\n\n")]
-        self.assertIn("emit_Media_0x32B();", timer)
-        self.assertIn("fill_Media_0x32B_group(14);", timer)
+        self.assertIn(MUX_FILL, timer)
+        self.assertIn("output(msg_Media_0x32B);", timer)
+        self.assertIn("if (mux_idx_Media_0x32B >= 1)", timer)
         self.assertIn("arm_Media_0x32B();", timer)
-        self.assertLess(timer.index("emit_Media_0x32B();"), timer.index("fill_Media_0x32B_group(14);"))
-        self.assertLess(timer.index("fill_Media_0x32B_group(14);"), timer.index("arm_Media_0x32B();"))
+        self.assertNotIn("emit_Media_0x32B();", timer)
         self.assertNotIn("send_Media_0x32B();", timer)
 
     def test_on_start_prepares_before_first_arm(self) -> None:
         content = self._generate(MUX_VSYSVAR)
         start = content[content.index("on start") : content.index("void output_all_Media_0x32B_groups")]
-        self.assertIn("fill_Media_0x32B_group(14);", start)
+        self.assertIn("mux_idx_Media_0x32B = 0;", start)
+        self.assertIn(MUX_FILL, start)
         self.assertIn("sync_Media_0x32B_payload();", start)
-        self.assertLess(start.index("fill_Media_0x32B_group(14);"), start.index("sync_Media_0x32B_payload();"))
+        self.assertLess(start.index(MUX_FILL), start.index("sync_Media_0x32B_payload();"))
         self.assertLess(start.index("sync_Media_0x32B_payload();"), start.index("arm_Media_0x32B();"))
-
-    def test_timer_fill_before_sync(self) -> None:
-        content = self._generate(MUX_VSYSVAR)
-        timer = content[content.index("on timer tmr_Media_0x32B") :]
-        timer = timer[: timer.index("\n\n")]
-        self.assertIn("fill_Media_0x32B_group(14);", timer)
-        self.assertIn("sync_Media_0x32B_payload();", timer)
-        self.assertLess(timer.index("fill_Media_0x32B_group(14);"), timer.index("sync_Media_0x32B_payload();"))
 
     def test_begin_burst_still_uses_send(self) -> None:
         vsysvar = MUX_VSYSVAR.replace(
@@ -69,9 +63,9 @@ class CaplCycleTimingGenerationTest(unittest.TestCase):
         ]
         handler = handler[: handler.index("\n\n")]
         self.assertIn("@media::Media_0x32B_Info.Media_0x32B_MsgOn == 1", handler)
-        self.assertIn("fill_Media_0x32B_group(14);", handler)
+        self.assertIn(MUX_FILL, handler)
         self.assertIn("sync_Media_0x32B_payload();", handler)
-        self.assertLess(handler.index("fill_Media_0x32B_group(14);"), handler.index("sync_Media_0x32B_payload();"))
+        self.assertLess(handler.index(MUX_FILL), handler.index("sync_Media_0x32B_payload();"))
         self.assertIn("arm_Media_0x32B();", handler)
         self.assertIn("cancelTimer(tmr_Media_0x32B);", handler)
 
