@@ -14,22 +14,21 @@ CAPL 生成器
     运行时不判断报文发送类型。无 {Msg}_MsgSendType 时按纯周期调度（_MsgCycleTime，缺省 10ms）。
 - 周期发送：每条报文独立 msTimer。到期先 output（emit）再 fill，帧间隔 = MsgCycleTime。
     IfActive / CA：在 {Sig}_has_inactive_value==1 时，Pv/Rv 跨越 inactive（进入或离开）都触发 burst。
-- 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；payload 在 on sysvar 中
-  通过 apply_{Msg}_{Sig}() 写 msg.信号.phys = {Sig}_Pv（无 Pv 时退回 raw Rv）；fill 仅 Mux 开关 + counter + checksum。
-  prepare 顺序：先 fill（设 Mux/counter/CRC）再 sync（批量 apply，Mux guard 成立后写 payload）。
-- emit 前 refresh_crc（payload 在 sysvar 中变更后保证 CRC 与 buffer 一致）；fill 末尾同样 refresh_crc（counter 递增后）。
+- 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；payload 在 fill 中写 msg.信号
+  （优先 Rv，无 Rv 时由 Pv 按 Factor/Offset 反算 raw）。
+- 周期 timer：emit 后再 fill 为下一帧 prepare；fill 末尾计算 counter/checksum。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
   时用 g_sv_quiet_* 计数器屏蔽 on sysvar，避免联动/恢复再次触发 burst。
 - Mux 报文：声明 mux_idx / mux_ids[]（即使仅 1 个 group，便于工程内手动扩展）；
-  周期 timer 轮询 fill → output → idx++ → arm(T)；on start / MsgOn prepare 为 fill → sync；
+  周期 timer 轮询 fill → output → idx++ → arm(T)；on start / MsgOn prepare 为 fill；
   output_all 循环各 group 连续 fill → output。
   CE OnChange/OnWrite 额外发一帧（触发信号所在 group），不打断周期 timer；额外帧经 fill
-  递增 counter 并 refresh_crc，发完后再次 fill 为下周期 prepare，避免 counter 重复。
+  递增 counter 并计算 checksum，发完后再次 fill 为下周期 prepare，避免 counter 重复。
   CA / Event / IfActive burst 均只发触发 group（或唯一 group）。
   Mux 开关信号不参与 burst 触发与影子恢复；其报文值由 fill_group(mux_id) 驱动，与用户 sysvar 赋值互不干扰。
   多路复用元数据全部来自 .vsysvar（_is_multiplexed / _is_multiplexer / _multiplexer_id），生成期写死。
-- MsgOn 控制周期 timer：MsgOn==1 时 fill+sync+arm；MsgOn==0 时 cancelTimer。on start 亦仅在 MsgOn==1 时 prepare+arm。
+- MsgOn 控制周期 timer：MsgOn==1 时 fill+arm；MsgOn==0 时 cancelTimer。on start 亦仅在 MsgOn==1 时 prepare+arm。
   emit/send 仍保留 MsgOn/MsgOff 门控作为兜底。
 """
 from __future__ import annotations
@@ -810,209 +809,6 @@ def _build_fill_group_function(
     return lines
 
 
-def _apply_function_name(message_name: str, signal_name: str) -> str:
-    return f"apply_{message_name}_{signal_name}"
-
-
-def _refresh_crc_function_name(message_name: str) -> str:
-    return f"refresh_crc_{message_name}"
-
-
-def _sync_payload_function_name(message_name: str) -> str:
-    return f"sync_{message_name}_payload"
-
-
-def _message_has_checksum(
-    has_validation: bool,
-    check_signal: str,
-    model: MessageModel,
-) -> bool:
-    if not has_validation:
-        return False
-    return bool(check_signal) and model.get(check_signal) is not None
-
-
-def _iter_payload_signals(
-    model: MessageModel,
-    counter_signal: str,
-    check_signal: str,
-) -> List[SignalModel]:
-    items: List[SignalModel] = []
-    for signal in model.signals:
-        if _is_mux_switch_signal(model, signal):
-            continue
-        if signal.name in (counter_signal, check_signal):
-            continue
-        if not signal.has_pv and not signal.has_rv:
-            continue
-        items.append(signal)
-    return items
-
-
-def _build_apply_assignment_lines(
-    namespace: str,
-    message_name: str,
-    signal: SignalModel,
-    *,
-    indent: str = "  ",
-) -> List[str]:
-    """生成 apply 函数体：msg.sig.phys = Pv；special 分支；无 Pv 时退回 raw Rv。"""
-    msg = _msg_var(message_name)
-    target = f"{msg}.{signal.name}"
-    lines: List[str] = []
-
-    if signal.has_pv:
-        normal_value = f"{target}.phys = {_sysvar(namespace, message_name, f'{signal.name}_Pv')};"
-    elif signal.has_rv:
-        normal_value = f"{target} = {_sysvar(namespace, message_name, f'{signal.name}_Rv')};"
-    else:
-        return []
-
-    if signal.has_special_value:
-        has_special = _sysvar(namespace, message_name, f"{signal.name}_has_special_value")
-        use_special = _sysvar(namespace, message_name, f"{signal.name}_use_special_value")
-        special_value = _sysvar(namespace, message_name, f"{signal.name}_special_value")
-        if signal.has_pv:
-            special_assign = f"{target}.phys = {special_value};"
-        else:
-            special_assign = f"{target} = {special_value};"
-        lines.extend([
-            f"{indent}if ({has_special} == 1 && {use_special} == 1)",
-            f"{indent}{{",
-            f"{indent}  {special_assign}",
-            f"{indent}}}",
-            f"{indent}else",
-            f"{indent}{{",
-            f"{indent}  {normal_value}",
-            f"{indent}}}",
-        ])
-    else:
-        lines.append(f"{indent}{normal_value}")
-
-    return lines
-
-
-def _wrap_mux_group_guard_lines(
-    message_name: str,
-    model: MessageModel,
-    signal: SignalModel,
-    inner_lines: List[str],
-    *,
-    indent: str = "  ",
-) -> List[str]:
-    if model.mux is None or not signal.has_multiplexer_id or signal.multiplexer_id is None:
-        return inner_lines
-    msg = _msg_var(message_name)
-    mux_name = model.mux.mux_signal_name
-    guard = f"{msg}.{mux_name} == {signal.multiplexer_id}"
-    return [
-        f"{indent}if ({guard})",
-        f"{indent}{{",
-        *inner_lines,
-        f"{indent}}}",
-    ]
-
-
-def _build_apply_function(
-    namespace: str,
-    message_name: str,
-    model: MessageModel,
-    signal: SignalModel,
-) -> List[str]:
-    func = _apply_function_name(message_name, signal.name)
-    body = _wrap_mux_group_guard_lines(
-        message_name,
-        model,
-        signal,
-        _build_apply_assignment_lines(namespace, message_name, signal, indent="    "),
-    )
-    if not body:
-        return []
-    lines = [f"void {func}()", "{"]
-    lines.extend(body)
-    lines.extend(["}", ""])
-    return lines
-
-
-def _build_all_apply_functions(
-    namespace: str,
-    message_name: str,
-    model: MessageModel,
-    counter_signal: str,
-    check_signal: str,
-) -> List[str]:
-    lines: List[str] = []
-    for signal in _iter_payload_signals(model, counter_signal, check_signal):
-        lines.extend(_build_apply_function(namespace, message_name, model, signal))
-    return lines
-
-
-def _build_sync_payload_function(
-    message_name: str,
-    model: MessageModel,
-    counter_signal: str,
-    check_signal: str,
-) -> List[str]:
-    calls = [
-        f"  {_apply_function_name(message_name, signal.name)}();"
-        for signal in _iter_payload_signals(model, counter_signal, check_signal)
-    ]
-    if not calls:
-        return []
-    lines = [f"void {_sync_payload_function_name(message_name)}()", "{"]
-    lines.extend(calls)
-    lines.extend(["}", ""])
-    return lines
-
-
-def _build_refresh_crc_function(
-    namespace: str,
-    message_name: str,
-    model: MessageModel,
-    parsed: ParsedSysvar,
-    has_validation: bool,
-    check_signal: str,
-    check_method: str,
-    check_parameters: Dict[str, Any],
-) -> List[str]:
-    if not _message_has_checksum(has_validation, check_signal, model):
-        return []
-    msg = _msg_var(message_name)
-    method = (check_method or "crc16").strip().lower()
-    params = check_parameters or {}
-    lines = [
-        f"void {_refresh_crc_function_name(message_name)}()",
-        "{",
-        "  byte _data[64];",
-        "  long _i, _n;",
-        "  dword _crc;",
-        "",
-        f"  {msg}.{check_signal} = 0;",
-        f"  _n = {msg}.dlc;",
-        "  for (_i = 0; _i < _n; _i++)",
-        f"    _data[_i] = {msg}.byte(_i);",
-    ]
-    if "crc" in method:
-        poly = _to_capl_int_literal(str(params.get("poly", "0x1021")))
-        init = _to_capl_int_literal(str(params.get("init", "0xFFFF")))
-        xor_out = _to_capl_int_literal(str(params.get("xorOut", "0x0000")))
-        lines.append(f"  _crc = PROJ_CRC16_CCITT(_data, _n, {init}, {poly}, {xor_out});")
-    else:
-        lines.append("  _crc = PROJ_Checksum(_data, _n);")
-    wrong_crc = _info_sysvar(namespace, message_name, "_WrongCRCFlag", parsed, "0")
-    if model.info and model.info.has_wrong_crc_flag:
-        lines.extend([
-            f"  if ({wrong_crc} == 1)",
-            "    _crc = _crc + 1;",
-        ])
-    lines.extend([
-        f"  {msg}.{check_signal} = _crc;",
-        "}",
-        "",
-    ])
-    return lines
-
-
 def _build_fill_body_lines(
     namespace: str,
     message_name: str,
@@ -1025,7 +821,7 @@ def _build_fill_body_lines(
     check_parameters: Dict[str, Any],
     mux_id_expr: Optional[str],
 ) -> List[str]:
-    """生成 fill 函数体：Mux 开关 + counter + refresh_crc（payload 由 sysvar apply 维护）。"""
+    """生成 fill 函数体（普通报文或指定 mux group）。"""
     msg = _msg_var(message_name)
     cnt_var = f"cnt_{message_name}"
     mux = model.mux
@@ -1038,9 +834,32 @@ def _build_fill_body_lines(
     has_checksum = _message_has_checksum(has_validation, check_signal, model)
 
     lines: List[str] = []
+    if has_checksum:
+        lines.append("  byte _data[64];")
+        lines.append("  long _i, _n;")
+        lines.append("  dword _crc;")
+        lines.append("")
 
     if mux is not None and mux_id_expr is not None:
         lines.append(_build_mux_signal_assignment(message_name, mux, mux_id_expr))
+
+    grouped_mux_signals: Dict[int, List[SignalModel]] = {}
+    for signal in model.signals:
+        if mux is not None and signal.name == mux.mux_signal_name:
+            continue
+        if signal.name in (counter_signal, check_signal):
+            continue
+        if mux is not None and mux_id_expr is not None and signal.has_multiplexer_id:
+            grouped_mux_signals.setdefault(signal.multiplexer_id, []).append(signal)
+            continue
+        lines.extend(_build_signal_assignment(namespace, message_name, signal))
+
+    for mux_id in sorted(grouped_mux_signals):
+        lines.append(f"  if (mux_id == {mux_id})")
+        lines.append("  {")
+        for signal in grouped_mux_signals[mux_id]:
+            lines.extend(f"  {line}" for line in _build_signal_assignment(namespace, message_name, signal))
+        lines.append("  }")
 
     if has_counter:
         counter = model.get(counter_signal)
@@ -1058,11 +877,76 @@ def _build_fill_body_lines(
         lines.append(f"    {cnt_var} = {cnt_var} + 1;")
 
     if has_checksum:
-        if lines:
-            lines.append("")
-        lines.append(f"  {_refresh_crc_function_name(message_name)}();")
+        method = (check_method or "crc16").strip().lower()
+        params = check_parameters or {}
+        lines.append("")
+        lines.append(f"  {msg}.{check_signal} = 0;")
+        lines.append(f"  _n = {msg}.dlc;")
+        lines.append("  for (_i = 0; _i < _n; _i++)")
+        lines.append(f"    _data[_i] = {msg}.byte(_i);")
+        if "crc" in method:
+            poly = _to_capl_int_literal(str(params.get("poly", "0x1021")))
+            init = _to_capl_int_literal(str(params.get("init", "0xFFFF")))
+            xor_out = _to_capl_int_literal(str(params.get("xorOut", "0x0000")))
+            lines.append(
+                f"  _crc = PROJ_CRC16_CCITT(_data, _n, {init}, {poly}, {xor_out});"
+            )
+        else:
+            lines.append("  _crc = PROJ_Checksum(_data, _n);")
+        wrong_crc = _info_sysvar(namespace, message_name, "_WrongCRCFlag", parsed, "0")
+        if model.info and model.info.has_wrong_crc_flag:
+            lines.append(f"  if ({wrong_crc} == 1)")
+            lines.append("    _crc = _crc + 1;")
+        lines.append(f"  {msg}.{check_signal} = _crc;")
 
     return lines
+
+
+def _build_signal_assignment(namespace: str, message_name: str, signal: SignalModel) -> List[str]:
+    msg = _msg_var(message_name)
+    target = f"{msg}.{signal.name}"
+    factor_lit = _format_float(signal.factor, "1")
+    offset_lit = _format_float(signal.offset, "0")
+
+    if signal.has_rv:
+        normal_value = _sysvar(namespace, message_name, f"{signal.name}_Rv")
+    elif signal.has_pv:
+        pv = _sysvar(namespace, message_name, f"{signal.name}_Pv")
+        normal_value = f"(({pv}) - ({offset_lit})) / ({factor_lit})"
+    else:
+        normal_value = "0"
+
+    lines: List[str] = []
+    branches: List[Tuple[str, str]] = []
+    if signal.has_special_value:
+        has_special = _sysvar(namespace, message_name, f"{signal.name}_has_special_value")
+        use_special = _sysvar(namespace, message_name, f"{signal.name}_use_special_value")
+        special_value = _sysvar(namespace, message_name, f"{signal.name}_special_value")
+        branches.append(
+            (f"{has_special} == 1 && {use_special} == 1", special_value)
+        )
+
+    if not branches:
+        lines.append(f"  {target} = {normal_value};")
+        return lines
+
+    for idx, (cond, value) in enumerate(branches):
+        keyword = "if" if idx == 0 else "else if"
+        lines.append(f"  {keyword} ({cond})")
+        lines.append(f"    {target} = {value};")
+    lines.append("  else")
+    lines.append(f"    {target} = {normal_value};")
+    return lines
+
+
+def _message_has_checksum(
+    has_validation: bool,
+    check_signal: str,
+    model: MessageModel,
+) -> bool:
+    if not has_validation:
+        return False
+    return bool(check_signal) and model.get(check_signal) is not None
 
 
 def _shadow_var(message_name: str, member_name: str) -> str:
@@ -1320,33 +1204,14 @@ def _build_fill_invoke_lines(message_name: str, model: MessageModel, indent: str
     return []
 
 
-def _build_sync_invoke_lines(
-    message_name: str,
-    model: MessageModel,
-    counter_signal: str,
-    check_signal: str,
-    indent: str = "  ",
-) -> List[str]:
-    if _iter_payload_signals(model, counter_signal, check_signal):
-        return [f"{indent}{_sync_payload_function_name(message_name)}();"]
-    return []
-
-
 def _build_prepare_invoke_lines(
     message_name: str,
     model: MessageModel,
-    counter_signal: str,
-    check_signal: str,
+    counter_signal: str = "",
+    check_signal: str = "",
     indent: str = "  ",
 ) -> List[str]:
-    lines: List[str] = []
-    lines.extend(_build_fill_invoke_lines(message_name, model, indent=indent))
-    lines.extend(
-        _build_sync_invoke_lines(
-            message_name, model, counter_signal, check_signal, indent=indent
-        )
-    )
-    return lines
+    return _build_fill_invoke_lines(message_name, model, indent=indent)
 
 
 def _build_startup_prepare_lines(
@@ -1566,13 +1431,6 @@ def _append_rv_to_pv_linkage_lines(
     lines.append(f"  {quiet} = {quiet} - 1;")
 
 
-def _append_apply_invoke(stmts: List[str], message_name: str, signal: SignalModel, suffix: str) -> None:
-    if suffix == "_Pv" and signal.has_pv:
-        stmts.append(f"  {_apply_function_name(message_name, signal.name)}();")
-    elif suffix == "_use_special_value" and signal.has_special_value:
-        stmts.append(f"  {_apply_function_name(message_name, signal.name)}();")
-
-
 def _build_merged_sysvar_handlers(
     namespace: str,
     message_name: str,
@@ -1611,7 +1469,6 @@ def _build_merged_sysvar_handlers(
                 )
             if linkage_ok:
                 _append_pv_to_rv_linkage_lines(stmts, namespace, message_name, signal)
-            _append_apply_invoke(stmts, message_name, signal, "_Pv")
             if decls or stmts:
                 lines.append(f"on sysvar {sv_path}")
                 lines.append("{")
@@ -1655,7 +1512,6 @@ def _build_merged_sysvar_handlers(
                 _append_burst_trigger_lines(
                     stmts, namespace, message_name, model, parsed, signal, "_use_special_value", member
                 )
-            _append_apply_invoke(stmts, message_name, signal, "_use_special_value")
             if decls or stmts:
                 lines.append(f"on sysvar {sv_path}")
                 lines.append("{")
@@ -1675,7 +1531,7 @@ def _build_msg_on_handler(
     counter_signal: str = "",
     check_signal: str = "",
 ) -> List[str]:
-    """MsgOn 控制周期 timer：开启 fill+sync+arm，关闭 cancelTimer。"""
+    """MsgOn 控制周期 timer：开启 fill+arm，关闭 cancelTimer。"""
     if not _needs_periodic_scheduler(model):
         return []
     if not _info_member_exists(parsed, message_name, "_MsgOn"):
@@ -1826,22 +1682,6 @@ def _build_can_file(
             out.extend(
                 _build_mux_output_all_groups_function(name, model, counter_sig, check_sig)
             )
-        out.extend(
-            _build_all_apply_functions(namespace, name, model, counter_sig, check_sig)
-        )
-        out.extend(_build_sync_payload_function(name, model, counter_sig, check_sig))
-        out.extend(
-            _build_refresh_crc_function(
-                namespace,
-                name,
-                model,
-                parsed,
-                has_val,
-                check_sig,
-                msg_cfg.get("check_method", "crc16"),
-                msg_cfg.get("check_parameters", {}),
-            )
-        )
         if _uses_begin_burst_send(model):
             out.extend(_build_begin_burst_function(namespace, name, parsed, model))
             out.extend(
@@ -1999,7 +1839,6 @@ def _build_send_additional_frame_function(
 ) -> List[str]:
     """CE：OnChange/OnWrite 额外发一帧，不 cancelTimer、不改 burst_left；counter 同样叠加。"""
     msg = _msg_var(message_name)
-    has_checksum = _message_has_checksum(has_validation, check_signal, model)
     if model.mux is not None:
         lines = [f"void send_additional_{message_name}(long mux_id)", "{"]
     else:
@@ -2009,38 +1848,14 @@ def _build_send_additional_frame_function(
         lines.append("  if (mux_id >= 0)")
         lines.append("  {")
         inner_indent = "    "
-        if has_checksum:
-            lines.append(f"{inner_indent}{_refresh_crc_function_name(message_name)}();")
         lines.append(f"{inner_indent}fill_{message_name}_group(mux_id);")
-        lines.extend(
-            _build_sync_invoke_lines(
-                message_name, model, counter_signal, check_signal, indent=inner_indent
-            )
-        )
         lines.append(f"{inner_indent}output({msg});")
         lines.append(f"{inner_indent}fill_{message_name}_group(mux_id);")
-        lines.extend(
-            _build_sync_invoke_lines(
-                message_name, model, counter_signal, check_signal, indent=inner_indent
-            )
-        )
         lines.append("  }")
     else:
-        if has_checksum:
-            lines.append(f"  {_refresh_crc_function_name(message_name)}();")
         lines.extend(_build_fill_invoke_lines(message_name, model, indent="  "))
-        lines.extend(
-            _build_sync_invoke_lines(
-                message_name, model, counter_signal, check_signal, indent="  "
-            )
-        )
         lines.append(f"  output({msg});")
         lines.extend(_build_fill_invoke_lines(message_name, model, indent="  "))
-        lines.extend(
-            _build_sync_invoke_lines(
-                message_name, model, counter_signal, check_signal, indent="  "
-            )
-        )
     lines.append("}")
     lines.append("")
     return lines
@@ -2071,8 +1886,6 @@ def _build_periodic_timer_cycle_lines(
     indent: str = "  ",
 ) -> List[str]:
     lines: List[str] = []
-    if has_checksum:
-        lines.append(f"{indent}{_refresh_crc_function_name(message_name)}();")
     lines.append(f"{indent}emit_{message_name}();")
     lines.extend(
         _build_prepare_invoke_lines(
@@ -2191,22 +2004,12 @@ def _build_send_function(
                 lines.append(f"    if ({burst_mux} >= 0)")
                 lines.append("    {")
                 lines.append(f"      fill_{message_name}_group({burst_mux});")
-                lines.extend(
-                    _build_sync_invoke_lines(
-                        message_name, model, counter_signal, check_signal, indent="      "
-                    )
-                )
                 lines.append(f"      output({msg});")
                 lines.append("    }")
             lines.append("    return;")
             lines.append("  }")
     else:
         lines.extend(_build_fill_invoke_lines(message_name, model, indent="  "))
-        lines.extend(
-            _build_sync_invoke_lines(
-                message_name, model, counter_signal, check_signal, indent="  "
-            )
-        )
         lines.append(f"  output({msg});")
     lines.append("}")
     lines.append("")
