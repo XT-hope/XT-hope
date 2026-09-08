@@ -12,16 +12,18 @@ CAPL 生成器
     Cycle / Event / IfActive / CE / CA（数值与 DBC GenMsgSendType 一致：0~4）。
     发送类型在生成期从 .vsysvar 的 {Msg}_MsgSendType 起始值解析，按类型生成对应 CAPL，
     运行时不判断报文发送类型。无 {Msg}_MsgSendType 时按纯周期调度（_MsgCycleTime，缺省 10ms）。
-- 周期发送：每条报文独立 msTimer。到期先 output（emit）再 fill，帧间隔 = MsgCycleTime。
+- 周期发送：每条报文独立 msTimer。到期先 output（emit），立刻 arm/setTimer 预约下一拍，
+    再 fill 为下一帧 prepare（含 counter/checksum）。帧间隔 = MsgCycleTime，fill/CRC
+    耗时不再叠进下一周期。
     IfActive / CA：在 {Sig}_has_inactive_value==1 时，Pv/Rv 跨越 inactive（进入或离开）都触发 burst。
 - 信号取值优先级：special > 普通值（不再使用 inactive 赋值）；payload 在 fill 中写
   msg.信号.phys = {Sig}_Pv（无 Pv 时退回 raw Rv）。
-- 周期 timer：emit 后再 fill 为下一帧 prepare；fill 末尾计算 counter/checksum。
+- 周期 timer：emit → arm → fill；on start / MsgOn 仍先 fill 再 arm，保证首帧数据就绪。
 - counter/checksum 可受 {msg}_WrongCounterFlag / {msg}_WrongCRCFlag 影响（为 1 时在计算结果上 +1）。
 - Pv/Rv 通过各自的 _Factor/_Offset 系统变量双向联动；写入对方成员与 finish_burst 恢复 sysvar
   时用 g_sv_quiet_* 计数器屏蔽 on sysvar，避免联动/恢复再次触发 burst。
 - Mux 报文：声明 mux_idx / mux_ids[]（即使仅 1 个 group，便于工程内手动扩展）；
-  周期 timer 轮询 fill → output → idx++ → arm(T)；on start / MsgOn prepare 为 fill；
+  周期 timer 轮询 emit → arm → idx++ → fill 下一 group；on start / MsgOn prepare 为 fill；
   output_all 循环各 group 连续 fill → output。
   CE OnChange/OnWrite 额外发一帧（触发信号所在 group），不打断周期 timer；额外帧经 fill
   递增 counter 并计算 checksum，发完后再次 fill 为下周期 prepare，避免 counter 重复。
@@ -1633,6 +1635,9 @@ def _build_can_file(
     for msg_cfg, model in messages:
         name = model.name
         out.append(f"  {_msg_var(name)}.CAN = {channel};")
+        dlc = msg_cfg.get("dlc")
+        if dlc:
+            out.append(f"  {_msg_var(name)}.dlc = {int(dlc)};")
         if _counter_enabled(msg_cfg, model):
             counter = model.get(msg_cfg.get("counter_signal", ""))
             cmin = _to_capl_number(counter.rv_min, "0")
@@ -1856,18 +1861,21 @@ def _build_send_additional_frame_function(
     return lines
 
 
-def _build_mux_round_robin_timer_lines(message_name: str, model: MessageModel) -> List[str]:
-    msg = _msg_var(message_name)
+def _build_mux_round_robin_timer_lines(
+    message_name: str, model: MessageModel, indent: str = "  "
+) -> List[str]:
+    """Mux 周期：先发已 prepare 的当前 group，立刻 arm，再切到下一 group 并 fill。"""
     group_count = _mux_group_count(model)
     mux_ids = _mux_ids_var(message_name)
     mux_idx = _mux_idx_var(message_name)
+    fill = f"fill_{message_name}_group({mux_ids}[{mux_idx}]);"
     return [
-        f"  fill_{message_name}_group({mux_ids}[{mux_idx}]);",
-        f"  output({msg});",
-        f"  {mux_idx} = {mux_idx} + 1;",
-        f"  if ({mux_idx} >= {group_count})",
-        f"    {mux_idx} = 0;",
-        f"  arm_{message_name}();",
+        f"{indent}emit_{message_name}();",
+        f"{indent}arm_{message_name}();",
+        f"{indent}{mux_idx} = {mux_idx} + 1;",
+        f"{indent}if ({mux_idx} >= {group_count})",
+        f"{indent}  {mux_idx} = 0;",
+        f"{indent}{fill}",
     ]
 
 
@@ -1880,14 +1888,15 @@ def _build_periodic_timer_cycle_lines(
     *,
     indent: str = "  ",
 ) -> List[str]:
+    """普通周期：emit → arm → fill。CRC 在 fill 末尾，发生在已经 setTimer 之后。"""
     lines: List[str] = []
     lines.append(f"{indent}emit_{message_name}();")
+    lines.append(f"{indent}arm_{message_name}();")
     lines.extend(
         _build_prepare_invoke_lines(
             message_name, model, counter_signal, check_signal, indent=indent
         )
     )
-    lines.append(f"{indent}arm_{message_name}();")
     return lines
 
 
@@ -1919,7 +1928,7 @@ def _build_timer_handler(
                 "  else",
                 "  {",
             ])
-            lines.extend(_build_mux_round_robin_timer_lines(message_name, model))
+            lines.extend(_build_mux_round_robin_timer_lines(message_name, model, indent="    "))
             lines.append("  }")
         else:
             lines.extend(_build_mux_round_robin_timer_lines(message_name, model))

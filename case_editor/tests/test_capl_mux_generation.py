@@ -108,9 +108,11 @@ class CaplMuxGenerationTest(unittest.TestCase):
         timer = content[content.index("on timer tmr_Media_0x32B") :]
         timer = timer[: timer.index("\n\n")]
         self.assertIn(MUX_FILL, timer)
-        self.assertIn("output(msg_Media_0x32B);", timer)
+        self.assertIn("emit_Media_0x32B();", timer)
         self.assertIn("if (mux_idx_Media_0x32B >= 1)", timer)
-        self.assertNotIn("emit_Media_0x32B();", timer)
+        self.assertIn("emit_Media_0x32B();", timer)
+        self.assertLess(timer.index("emit_Media_0x32B();"), timer.index("arm_Media_0x32B();"))
+        self.assertLess(timer.index("arm_Media_0x32B();"), timer.index(MUX_FILL))
         self.assertNotIn("sync_Media_0x32B_payload();", timer)
         self.assertNotIn("send_Media_0x32B();", timer)
         self.assertNotIn("msTimer tmr_sched;", content)
@@ -204,7 +206,7 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertIn("  arm_Media_0x32B();", content)
         self.assertIn("on timer tmr_Media_0x32B", content)
         self.assertIn(MUX_FILL, content)
-        self.assertNotIn("emit_Media_0x32B();", content[content.index("on timer tmr_Media_0x32B") :])
+        self.assertIn("emit_Media_0x32B();", content[content.index("on timer tmr_Media_0x32B") :])
         self.assertIn("long mux_ids_Media_0x32B[1] = {14};", content)
         self.assertNotIn("send_Media_0x32B();", content[content.index("on timer tmr_Media_0x32B") : content.index("void send_Media_0x32B")])
         self.assertIn("setTimer(tmr_Media_0x32B, _ct);", content)
@@ -509,6 +511,8 @@ class CaplMuxGenerationTest(unittest.TestCase):
 
     def test_multi_mux_three_groups_round_robin(self) -> None:
         vsysvar_path = "/opt/cursor/artifacts/capl_demo/demo_0x100_groups_1_2_3.vsysvar"
+        if not Path(vsysvar_path).is_file():
+            self.skipTest(f"missing fixture {vsysvar_path}")
         with open(vsysvar_path, encoding="utf-8") as fh:
             vsysvar = fh.read()
         with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
@@ -530,10 +534,14 @@ class CaplMuxGenerationTest(unittest.TestCase):
         self.assertNotIn("sync_Demo_0x100_payload();", start)
 
         timer = content[content.index("on timer tmr_Demo_0x100") : content.index("void send_Demo_0x100")]
+        self.assertIn("emit_Demo_0x100();", timer)
         self.assertIn("fill_Demo_0x100_group(mux_ids_Demo_0x100[mux_idx_Demo_0x100]);", timer)
-        self.assertIn("output(msg_Demo_0x100);", timer)
         self.assertIn("if (mux_idx_Demo_0x100 >= 3)", timer)
-        self.assertNotIn("emit_Demo_0x100();", timer)
+        self.assertLess(timer.index("emit_Demo_0x100();"), timer.index("arm_Demo_0x100();"))
+        self.assertLess(
+            timer.index("arm_Demo_0x100();"),
+            timer.index("fill_Demo_0x100_group(mux_ids_Demo_0x100[mux_idx_Demo_0x100]);"),
+        )
 
         output_all = content[
             content.index("void output_all_Demo_0x100_groups") : content.index("on sysvar")
