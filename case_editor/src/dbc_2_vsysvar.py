@@ -272,6 +272,9 @@ def resolve_send_type_index(value, choices: List[ValueTableEntry]) -> Decimal:
 	if value is None:
 		value = "Cycle"
 	if isinstance(value, str):
+		normalized = value.strip().lower().replace(" ", "").replace("_", "")
+		if normalized in ("nomsgsendtype", "nosendtype", "none"):
+			return Decimal("0")
 		for entry in choices:
 			if entry.description == value:
 				return entry.value
