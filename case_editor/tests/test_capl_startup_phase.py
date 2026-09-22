@@ -141,6 +141,70 @@ class CaplStartupPhaseTest(unittest.TestCase):
         msg_on = msg_on[: msg_on.index("\n\n")]
         self.assertIn("arm_start_Cycle_0x100();", msg_on)
         self.assertNotIn("arm_Cycle_0x100();", msg_on)
+        self.assertIn("cancelTimer(tmr_Cycle_0x100);", msg_on)
+        self.assertIn(
+            "on sysvar demo::Cycle_0x100_Info.Cycle_0x100_MsgOff",
+            content,
+        )
+
+    def test_msg_off_and_timer_cancel_instead_of_return_only(self) -> None:
+        with tempfile.NamedTemporaryFile("w", suffix=".vsysvar", delete=False, encoding="utf-8") as fh:
+            fh.write(CYCLE_10MS_VSYSVAR)
+            path = fh.name
+        parsed = parse_vsysvar(path)
+        model = parsed.messages["Cycle_0x100"]
+        msg_cfg = {"message_name": "Cycle_0x100", "has_validation": False, "dlc": 8}
+        content = _build_can_file("demo", "ECU", 1, [(msg_cfg, model)], parsed, {model.name: 0x100})
+
+        allowed = (
+            "@demo::Cycle_0x100_Info.Cycle_0x100_MsgOn == 1 && "
+            "@demo::Cycle_0x100_Info.Cycle_0x100_MsgOff != 1"
+        )
+        start = _on_start(content)
+        self.assertIn(f"if ({allowed})", start)
+        self.assertIn("arm_start_Cycle_0x100();", start)
+
+        timer = _on_timer(content, "Cycle_0x100")
+        self.assertIn(f"if (!({allowed}))", timer)
+        self.assertIn("cancelTimer(tmr_Cycle_0x100);", timer)
+        self.assertIn("return;", timer)
+        self.assertLess(timer.index("cancelTimer"), timer.index("emit_Cycle_0x100();"))
+        self.assertLess(timer.index("emit_Cycle_0x100();"), timer.index("arm_Cycle_0x100();"))
+
+        emit = content[content.index("void emit_Cycle_0x100()") :]
+        emit = emit[: emit.index("\non timer")]
+        self.assertIn("cancelTimer(tmr_Cycle_0x100);", emit)
+        self.assertIn("return;", emit)
+        self.assertNotIn("!= 1) return;", emit)
+        self.assertNotIn("== 1) return;", emit)
+
+        msg_off = content[content.index("on sysvar demo::Cycle_0x100_Info.Cycle_0x100_MsgOff") :]
+        msg_off = msg_off[: msg_off.index("\n\n")]
+        self.assertIn(f"if ({allowed})", msg_off)
+        self.assertIn("cancelTimer(tmr_Cycle_0x100);", msg_off)
+        self.assertIn("arm_start_Cycle_0x100();", msg_off)
+
+    def test_send_additional_does_not_cancel_timer(self) -> None:
+        vsysvar = CYCLE_10MS_VSYSVAR.replace(
+            'Cycle_0x100_MsgSendType" type="int" startValue="0"',
+            'Cycle_0x100_MsgSendType" type="int" startValue="3"',
+            1,
+        )
+        parsed = _parse(vsysvar)
+        model = parsed.messages["Cycle_0x100"]
+        content = _build_can_file(
+            "demo",
+            "ECU",
+            1,
+            [({"message_name": "Cycle_0x100", "has_validation": False, "dlc": 8}, model)],
+            parsed,
+            {model.name: 0x100},
+        )
+        additional = content[content.index("void send_additional_Cycle_0x100") :]
+        additional = additional[: additional.index("\nvoid arm_Cycle_0x100")]
+        self.assertIn("if (!(", additional)
+        self.assertIn(") return;", additional)
+        self.assertNotIn("cancelTimer(tmr_Cycle_0x100);", additional)
 
     def test_ten_ms_messages_get_distinct_first_delays(self) -> None:
         specs = [(f"Cycle_0x{0x100 + i:X}", 10) for i in range(10)]

@@ -35,8 +35,10 @@ CAPL 生成器（启动相位错开试验版）
   CA / Event / IfActive burst 均只发触发 group（或唯一 group）。
   Mux 开关信号不参与 burst 触发与影子恢复；其报文值由 fill_group(mux_id) 驱动，与用户 sysvar 赋值互不干扰。
   多路复用元数据全部来自 .vsysvar（_is_multiplexed / _is_multiplexer / _multiplexer_id），生成期写死。
-- MsgOn 控制周期 timer：MsgOn==1 时 fill+arm_start；MsgOn==0 时 cancelTimer。on start 亦仅在 MsgOn==1 时 prepare+arm_start。
-  emit/send 仍保留 MsgOn/MsgOff 门控作为兜底。
+- 停发取消周期 timer，而不是只在 emit/send 里 return：MsgOn==0 / MsgOff==1 / 节点门控
+  关闭时 cancelTimer；重新允许发送时 fill+arm_start。on timer 若已不允许发送则
+  cancelTimer 后 return，避免 emit return 之后仍 arm 把定时器续上。
+  CE 的 send_additional 仍只 return、不 cancelTimer，以免打断周期。
 """
 from __future__ import annotations
 
@@ -1525,28 +1527,86 @@ def _build_merged_sysvar_handlers(
     return lines
 
 
-def _build_msg_on_handler(
+def _sending_allowed_expr(
     namespace: str,
+    dbc_name: str,
+    sender_node: str,
+    message_name: str,
+    parsed: ParsedSysvar,
+) -> Optional[str]:
+    """周期发送允许条件：节点/报文 MsgOn 为 1 且 MsgOff 不为 1。"""
+    parts: List[str] = []
+    node_on = f"{dbc_name}_Node_On"
+    if node_on in parsed.variable_names:
+        parts.append(f"{_sysvar(namespace, node_on)} == 1")
+    if f"{sender_node}_MsgOn" in parsed.member_names:
+        parts.append(
+            f"{_sysvar(namespace, f'{dbc_name}_Node_Info', sender_node + '_MsgOn')} == 1"
+        )
+    info = _info_var(message_name)
+    if info in parsed.variable_names:
+        parts.append(f"{_sysvar(namespace, info, message_name + '_MsgOn')} == 1")
+        parts.append(f"{_sysvar(namespace, info, message_name + '_MsgOff')} != 1")
+    return " && ".join(parts) if parts else None
+
+
+def _append_stop_timer_if_not_sending(
+    lines: List[str],
+    namespace: str,
+    dbc_name: str,
+    sender_node: str,
+    message_name: str,
+    parsed: ParsedSysvar,
+    *,
+    indent: str = "  ",
+    cancel_timer: bool = True,
+) -> None:
+    """不允许发送时停表（或仅 return）。cancel_timer=False 用于 CE 额外帧。"""
+    allowed = _sending_allowed_expr(
+        namespace, dbc_name, sender_node, message_name, parsed
+    )
+    if not allowed:
+        return
+    if cancel_timer:
+        lines.append(f"{indent}if (!({allowed}))")
+        lines.append(f"{indent}{{")
+        lines.append(f"{indent}  cancelTimer(tmr_{message_name});")
+        lines.append(f"{indent}  return;")
+        lines.append(f"{indent}}}")
+    else:
+        lines.append(f"{indent}if (!({allowed})) return;")
+
+
+def _build_gate_sysvar_handler(
+    sv_path: str,
+    namespace: str,
+    dbc_name: str,
+    sender_node: str,
     message_name: str,
     model: MessageModel,
     parsed: ParsedSysvar,
     counter_signal: str = "",
     check_signal: str = "",
 ) -> List[str]:
-    """MsgOn 控制周期 timer：开启 fill+arm_start，关闭 cancelTimer。"""
+    """门控 sysvar 变化：允许则 fill+arm_start，否则 cancelTimer。"""
     if not _needs_periodic_scheduler(model):
         return []
-    if not _info_member_exists(parsed, message_name, "_MsgOn"):
+    allowed = _sending_allowed_expr(
+        namespace, dbc_name, sender_node, message_name, parsed
+    )
+    if not allowed:
         return []
-    sv_path = f"{namespace}::{_info_var(message_name)}.{message_name}_MsgOn"
-    msg_on = _info_sysvar(namespace, message_name, "_MsgOn", parsed, "1")
     lines = [
         f"on sysvar {sv_path}",
         "{",
-        f"  if ({msg_on} == 1)",
+        f"  if ({allowed})",
         "  {",
     ]
-    lines.extend(_build_startup_prepare_lines(message_name, model, counter_signal, check_signal, indent="    "))
+    lines.extend(
+        _build_startup_prepare_lines(
+            message_name, model, counter_signal, check_signal, indent="    "
+        )
+    )
     lines.append(f"    arm_start_{message_name}();")
     lines.extend([
         "  }",
@@ -1558,6 +1618,132 @@ def _build_msg_on_handler(
         "",
     ])
     return lines
+
+
+def _build_msg_on_handler(
+    namespace: str,
+    dbc_name: str,
+    sender_node: str,
+    message_name: str,
+    model: MessageModel,
+    parsed: ParsedSysvar,
+    counter_signal: str = "",
+    check_signal: str = "",
+) -> List[str]:
+    """MsgOn / MsgOff 控制周期 timer：允许发送 fill+arm_start，否则 cancelTimer。"""
+    if not _needs_periodic_scheduler(model):
+        return []
+    lines: List[str] = []
+    info = _info_var(message_name)
+    if _info_member_exists(parsed, message_name, "_MsgOn"):
+        sv_path = f"{namespace}::{info}.{message_name}_MsgOn"
+        lines.extend(
+            _build_gate_sysvar_handler(
+                sv_path,
+                namespace,
+                dbc_name,
+                sender_node,
+                message_name,
+                model,
+                parsed,
+                counter_signal,
+                check_signal,
+            )
+        )
+    if _info_member_exists(parsed, message_name, "_MsgOff"):
+        sv_path = f"{namespace}::{info}.{message_name}_MsgOff"
+        lines.extend(
+            _build_gate_sysvar_handler(
+                sv_path,
+                namespace,
+                dbc_name,
+                sender_node,
+                message_name,
+                model,
+                parsed,
+                counter_signal,
+                check_signal,
+            )
+        )
+    return lines
+
+
+def _build_node_gate_handlers(
+    namespace: str,
+    dbc_name: str,
+    sender_node: str,
+    messages: List[Tuple[Dict[str, Any], MessageModel]],
+    parsed: ParsedSysvar,
+) -> List[str]:
+    """节点级门控：关闭时立刻 cancel 本节点全部周期 timer。"""
+    periodic = [
+        (msg_cfg, model)
+        for msg_cfg, model in messages
+        if _needs_periodic_scheduler(model)
+    ]
+    if not periodic:
+        return []
+
+    def _resume_or_stop_all(sv_path: str) -> List[str]:
+        lines = [f"on sysvar {sv_path}", "{"]
+        cancel_block: List[str] = []
+        resume_block: List[str] = []
+        for msg_cfg, model in periodic:
+            name = model.name
+            allowed = _sending_allowed_expr(
+                namespace, dbc_name, sender_node, name, parsed
+            )
+            cancel_block.append(f"    cancelTimer(tmr_{name});")
+            if allowed:
+                resume_block.append(f"    if ({allowed})")
+                resume_block.append("    {")
+                counter_sig = (
+                    msg_cfg.get("counter_signal", "")
+                    if msg_cfg.get("has_validation", False)
+                    else ""
+                )
+                check_sig = (
+                    msg_cfg.get("check_signal", "")
+                    if msg_cfg.get("has_validation", False)
+                    else ""
+                )
+                resume_block.extend(
+                    _build_startup_prepare_lines(
+                        name, model, counter_sig, check_sig, indent="      "
+                    )
+                )
+                resume_block.append(f"      arm_start_{name}();")
+                resume_block.append("    }")
+        node_on = f"{dbc_name}_Node_On"
+        if sv_path.endswith(node_on):
+            enable_expr = f"{_sysvar(namespace, node_on)} == 1"
+        else:
+            enable_expr = (
+                f"{_sysvar(namespace, f'{dbc_name}_Node_Info', sender_node + '_MsgOn')} == 1"
+            )
+        lines.append(f"  if ({enable_expr})")
+        lines.append("  {")
+        lines.extend(resume_block or ["    ;"])
+        lines.append("  }")
+        lines.append("  else")
+        lines.append("  {")
+        lines.extend(cancel_block)
+        lines.append("  }")
+        lines.append("}")
+        lines.append("")
+        return lines
+
+    out: List[str] = []
+    node_on = f"{dbc_name}_Node_On"
+    if node_on in parsed.variable_names:
+        out.extend(_resume_or_stop_all(f"{namespace}::{node_on}"))
+    if f"{sender_node}_MsgOn" in parsed.member_names:
+        out.extend(
+            _resume_or_stop_all(
+                f"{namespace}::{dbc_name}_Node_Info.{sender_node}_MsgOn"
+            )
+        )
+    return out
 
 
 def _periodic_phase_indices(
@@ -1576,16 +1762,20 @@ def _periodic_phase_indices(
 
 def _build_on_start_arm_lines(
     namespace: str,
+    dbc_name: str,
+    sender_node: str,
     message_name: str,
     model: MessageModel,
     parsed: ParsedSysvar,
 ) -> List[str]:
     if not _needs_periodic_scheduler(model):
         return []
-    if _info_member_exists(parsed, message_name, "_MsgOn"):
-        msg_on = _info_sysvar(namespace, message_name, "_MsgOn", parsed, "1")
+    allowed = _sending_allowed_expr(
+        namespace, dbc_name, sender_node, message_name, parsed
+    )
+    if allowed:
         return [
-            f"  if ({msg_on} == 1)",
+            f"  if ({allowed})",
             f"    arm_start_{message_name}();",
         ]
     return [f"  arm_start_{message_name}();"]
@@ -1688,7 +1878,7 @@ def _build_can_file(
         counter_sig = msg_cfg.get("counter_signal", "") if msg_cfg.get("has_validation", False) else ""
         check_sig = msg_cfg.get("check_signal", "") if msg_cfg.get("has_validation", False) else ""
         out.extend(_build_startup_prepare_lines(name, model, counter_sig, check_sig))
-        out.extend(_build_on_start_arm_lines(namespace, name, model, parsed))
+        out.extend(_build_on_start_arm_lines(namespace, dbc_name, sender_node, name, model, parsed))
     out.append("}")
     out.append("")
 
@@ -1762,8 +1952,14 @@ def _build_can_file(
         )
         out.extend(_build_merged_sysvar_handlers(namespace, name, model, parsed, exclude))
         out.extend(
-            _build_msg_on_handler(namespace, name, model, parsed, counter_sig, check_sig)
+            _build_msg_on_handler(
+                namespace, dbc_name, sender_node, name, model, parsed, counter_sig, check_sig
+            )
         )
+
+    out.extend(
+        _build_node_gate_handlers(namespace, dbc_name, sender_node, messages, parsed)
+    )
 
     return "\n".join(out) + "\n"
 
@@ -1877,7 +2073,9 @@ def _build_emit_function(
 ) -> List[str]:
     msg = _msg_var(message_name)
     lines = [f"void emit_{message_name}()", "{"]
-    _append_send_gate_lines(lines, namespace, dbc_name, sender_node, message_name, parsed)
+    _append_send_gate_lines(
+        lines, namespace, dbc_name, sender_node, message_name, parsed, cancel_timer=True
+    )
     lines.append(f"  output({msg});")
     lines.append("}")
     lines.append("")
@@ -1901,7 +2099,9 @@ def _build_send_additional_frame_function(
         lines = [f"void send_additional_{message_name}(long mux_id)", "{"]
     else:
         lines = [f"void send_additional_{message_name}()", "{"]
-    _append_send_gate_lines(lines, namespace, dbc_name, sender_node, message_name, parsed)
+    _append_send_gate_lines(
+        lines, namespace, dbc_name, sender_node, message_name, parsed, cancel_timer=False
+    )
     if model.mux is not None:
         lines.append("  if (mux_id >= 0)")
         lines.append("  {")
@@ -1971,6 +2171,9 @@ def _build_timer_handler(
 ) -> List[str]:
     has_checksum = _message_has_checksum(has_validation, check_signal, model)
     lines = [f"on timer tmr_{message_name}", "{"]
+    _append_stop_timer_if_not_sending(
+        lines, namespace, dbc_name, sender_node, message_name, parsed
+    )
     if _uses_mux_scheduler(model):
         if _uses_begin_burst_send(model):
             lines.extend([
@@ -2027,17 +2230,18 @@ def _append_send_gate_lines(
     sender_node: str,
     message_name: str,
     parsed: ParsedSysvar,
+    *,
+    cancel_timer: bool,
 ) -> None:
-    info = _info_var(message_name)
-    node_info = f"{dbc_name}_Node_Info"
-    node_on = f"{dbc_name}_Node_On"
-    if node_on in parsed.variable_names:
-        lines.append(f"  if ({_sysvar(namespace, node_on)} != 1) return;")
-    if f"{sender_node}_MsgOn" in parsed.member_names:
-        lines.append(f"  if ({_sysvar(namespace, node_info, sender_node + '_MsgOn')} != 1) return;")
-    if info in parsed.variable_names:
-        lines.append(f"  if ({_sysvar(namespace, info, message_name + '_MsgOn')} != 1) return;")
-        lines.append(f"  if ({_sysvar(namespace, info, message_name + '_MsgOff')} == 1) return;")
+    _append_stop_timer_if_not_sending(
+        lines,
+        namespace,
+        dbc_name,
+        sender_node,
+        message_name,
+        parsed,
+        cancel_timer=cancel_timer,
+    )
 
 
 def _build_send_function(
@@ -2053,7 +2257,9 @@ def _build_send_function(
     msg = _msg_var(message_name)
     send_type = _resolve_msg_send_type(model)
     lines = [f"void send_{message_name}()", "{"]
-    _append_send_gate_lines(lines, namespace, dbc_name, sender_node, message_name, parsed)
+    _append_send_gate_lines(
+        lines, namespace, dbc_name, sender_node, message_name, parsed, cancel_timer=True
+    )
 
     if model.mux is not None:
         if _uses_begin_burst_send(model):
