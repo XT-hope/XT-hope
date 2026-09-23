@@ -1,0 +1,29 @@
+/*@!Encoding:65001*/
+/*
+ * 周期发送空 CAN 报文
+ * - ID: 0x500 (500)
+ * - 通道: CAN 1
+ * - 周期: 100 ms
+ * - DLC: 0（无数据字节）
+ *
+ * 用法：在 Simulation Setup 中新建 CAPL 节点，关联本文件即可。
+ */
+
+variables
+{
+  message 0x500 msg_empty_0x500;
+  msTimer tmr_empty_0x500;
+}
+
+on start
+{
+  msg_empty_0x500.CAN = 1;
+  msg_empty_0x500.dlc = 0;
+  setTimer(tmr_empty_0x500, 100);
+}
+
+on timer tmr_empty_0x500
+{
+  output(msg_empty_0x500);
+  setTimer(tmr_empty_0x500, 100);
+}
