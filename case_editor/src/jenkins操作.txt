@@ -1,0 +1,59 @@
+Jenkins 项目搭建
+
+目的：在本机 Windows 上启动 Jenkins 入站 Agent，通过 WebSocket 连到 Jenkins 控制器，把构建任务分配到这台机器执行。
+
+1. 配置系统
+路径：Dashboard --> Manage Jenkins --> System
+
+- of executors: 0
+  控制器本身不跑构建，任务只派到 Agent 节点。
+- Labels: XT-CSW-Agent
+- Jenkins URL: http://10.71.250.222:8080/
+  填本机 IP。换机器或改 IP 后要同步改这里，以及后面 Agent 连接用的 -url。
+
+2. 新建 Jenkins 工程
+路径：Dashboard --> New Item
+
+按需要填写工程名后保存。构建命令在第 4 步 Configure 里写。
+
+3. 新建节点
+路径：Dashboard --> Manage Jenkins --> Nodes --> New Node --> configure
+
+- Name: XT-CSW-HIL
+- Number of executors: 1
+- Remote root directory: D:\MyProgramm\AI_Automation_Tmp
+  任意本机目录均可，用来放临时文件、编译产物等。后面 Agent 的 -workDir 应对齐这个目录。
+- Labels: XT-CSW-Agent
+  必须和第 1 步、第 4 步 Label Expression 一致，工程才能被调度到该节点。
+
+4. 配置工程
+打开第 2 步新建的工程，点击 Configure。
+
+- 勾选 Restrict where this project can be run
+- Label Expression 填第 3 步的 Labels：XT-CSW-Agent
+- Build Steps 选择 Execute Windows batch command，填写本工程要执行的命令。示例：
+
+cd D:\MyProgramm\AI_Automation\sim_testbed_lightweight
+call .venv\Scripts\activate.bat
+cd .\VT_AutomationSuite
+python .\test3.py
+
+5. 在本机启动入站 Agent
+路径：Dashboard --> Manage Jenkins --> Nodes --> XT-CSW-HIL
+
+页面里 Run from agent command line (Windows) 会给出两条命令。复制到本机 cmd 执行。
+
+指令 1（下载 agent.jar，一般可直接用）：
+
+curl.exe -sO http://10.71.250.222:8080/jnlpJars/agent.jar
+
+指令 2（连接控制器）：页面给出的默认命令走 JNLP，实测需要改成 WebSocket。在原命令末尾加上 -webSocket，例如：
+
+java -jar agent.jar -url http://10.71.250.222:8080/ -secret <从节点页面复制的 secret> -name XT-CSW-HIL -workDir "D:\MyProgramm\AI_Automation_Tmp" -webSocket
+
+注意：
+- -name 必须和第 3 步节点 Name 一致（XT-CSW-HIL），不要改成其他名字。
+- -workDir 应对齐 Remote root directory。
+- -secret 从该节点页面现拷，节点重建后会变，不要写进仓库或其他文档。
+- 必须带 -webSocket，否则 Agent 连不上控制器。
+- Agent 进程要一直开着；关掉后 Jenkins 无法把第 4 步的 Build Steps 派到这台机器。
