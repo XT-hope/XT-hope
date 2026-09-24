@@ -1,0 +1,101 @@
+DBC 理解
+
+#########################################
+NS_ 是一个“关键字/符号声明段”。它的作用是说明这份 DBC 后面会用到哪些语法段或扩展关键字，用来组织和分类文件内容。
+例子：
+1. NS_ :
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
+
+#########################################
+BS_ 表示总线速率字段，但实际工程中该字段往往是空的
+
+#########################################
+BU_ 表示定义了哪些节点
+例子：
+BU_: Left_BCM Right_BCM Rear_BCM SEC HFRM Media INFC LTE4G INS CS SWS WCM ECL MDS AVAS RSCU RRSE LRSE DB PSDL PSDR IRM PM25 BD PHP SASD SASP ALS PAL SECUP AMP ACCD FPTC RPTC OH LBMS SCPA SCU ECM ECM_Fuel VCU BMS LS DCOBC DCDC BDC FMCU RMCU ISG BSG TCU TCU_Fuel BH IPB EPS SRS ADC MRR LRCR RRCR FCR APA FLL FLR MSR_DRV MSR_PSG SGS DiSus VDS CPD PAS Lidar HOD VALEO PPS CCU DHC CIC CMS MIRM UCU
+
+#########################################
+CM_ BO_/SG_/BU_ 给报文/信号/节点加注释
+例子：
+	1. CM_ BO_ 1074 "AEB状态报文"; 给 id 为 1074 的报文添加注释“AEB状态报文”
+	2. CM_ SG_ 1074 AEB_Assemble_Status_2S "是否配备AEB"; 给 id 为 1074 的报文上名为 AEB_Assemble_Status_2S 的信号添加注释"是否配备AEB"
+	3. CM_ BU_ BCM "车身控制模块"; 给节点 BCM 添加注释"车身控制模块"
+	4. CM_ "<Comments>"; 给整个 dbc 数据库添加注释
+
+#########################################
+
+BA_DEF_ Object_Type(network, node, message, signal, environmental variable, control unit-env variable) “属性名” Type(Enum, int, float) 属性值的范围
+
+BA_DEF_ 是给 dbc 中的不同对象设置属性
+例子：
+	1. BA_DEF_ BO_ "GenMsgCycleTime" INT 0 65535; 给报文对象设置一个 GenMsgCycleTime 的属性，类型为 int，最小值 0，最大值 65535
+	2. BA_DEF_ SG_  "GenSigStartValue" INT 0 2147483647; 给信号对象设置一个 GenSigStartValue 的属性（初始值），类型为 int，最小值 0，最大值 2147483647
+	3. BA_DEF_ BU_  "NmAsrCanMsgCycleOffset" INT 0 65535; 给节点对象设置一个 NmAsrCanMsgCycleOffset 属性，类型为 int，最小值 0，最大值 65535
+	4. 全局属性：不带对象：
+		1. BA_DEF_  "BusType" STRING ;
+		2. BA_DEF_  "DBName" STRING ;
+	5. BA_DEF_ BU_  "ILUsed" ENUM  "No","Yes";  表示 dbc 数据库中的节点是否使用 Interaction Layer（IL）。
+	6. BA_DEF_ BU_  "NmAsrCanMsgCycleOffset" INT 0 65535; 表示 NmAsrCanMsgCycleOffset
+	7. BA_DEF_ BU_  "NmAsrCanMsgReducedTime" INT 1 65535; 表示在带总线负载降低（bus load reduction）的周期发送模式下，节点特定的总线周期时间
+	8. BA_DEF_ BU_  "NmAsrNode" ENUM  "No","Yes"; 表示该节点是否是 AUTOSAR NM 节点 （NM: network manager）。
+	9. BA_DEF_ BU_  "NmAsrNodeIdentifier" HEX 0 255; 表示本地节点的节点标识符（Node identifier of local node）
+	10. BA_DEF_ BU_  "NodeLayerModules" STRING ; 表示该节点关联了哪些层/模块（layer modules）
+
+#########################################
+
+BA_DEF_DEF_ 是给属性赋初始值
+例子：
+	1. BA_DEF_DEF_  "GenMsgCycleTime" 0; 给属性 GenMsgCycleTime 的初始值设为 0
+	2. BA_DEF_DEF_  "BusType" "CAN FD"; 给全局属性 BusType 的初始值设为 CAN FD
+
+#########################################
+
+BA_ 是给具体报文/信号/节点/全局的属性赋值
+例子：
+	1. BA_ "GenMsgSendType" BO_ 268 0; 给 id 为 268 的报文的 GenMsgSendType 属性设为 0
+	2. BA_ "DBName" "Control"; 给全局属性 DBName 设置为 Control
+	3. BA_ "GenSigStartValue" SG_ 268 Checksum_10C_S 0; 给 id 为 268 的报文上的信号 Checksum_10C_S 的 GenSigStartValue 属性（初始值）设为 0
+
+#########################################
+VAL_ 给报文上的信号定义枚举值表（如果信号的类型是枚举类型）
+例子：
+	1. VAL_ 268 VehicleSpeed_Status 0 "Valid" 1 "Invalid" ; 给 id 为 268 的报文上的 VehicleSpeed_Status 信号定义枚举值列表：0 表示 "Valid"，1 表示 "Invalid"
+
+
+报文常见属性：
+1. GenMsgCycleTime		报文周期时间，单位通常是 ms
+2. GenMsgCycleTimeFast		快速发送周期，单位通常是 ms。一般用于报文进入“快速发送模式”时的周期，比如事件触发后的短时间高频发送
+3. GenMsgDelayTime		发送延迟时间或最小发送间隔，单位通常是 ms。常用于限制事件触发报文不要立刻或过于频繁发送
+4. GenMsgSendType		报文发送类型：Cycle，Event，IfActive，CE，CA，NoMsgSendTyp
+5. VFrameFormat			CAN 帧格式，它描述这条报文使用：StandardCAN / ExtendedCAN / StandardCAN_FD / ExtendedCAN_FD / J1939PG
+6. GenMsgILSupport		该报文是否交给 CANoe Interaction Layer 自动管理
+7. GenMsgNrOfRepetition	事件触发后重复发送次数。它通常和事件发送、快速发送配合使用。GenMsgNrOfRepetition = 3，GenMsgCycleTimeFast = 20 可以理解为：事件触发后，以 20 ms 快速周期重复发送 3 次
+8. GenMsgStartDelayTime	报文启动发送延迟，单位通常是 ms。它表示节点启动或测量开始后，延迟多久才发送第一帧该报文。
+9. NmAsrMessage			标记该报文是否是 AUTOSAR Network Management 报文
